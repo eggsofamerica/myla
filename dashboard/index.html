@@ -162,8 +162,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
   try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
   state.ui = {};
-  state.af = { tps: [], ch: '', sa: '', rel: '', nys: false, recent: false };
-  state.tf = { cm: '', tps: [], pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
+  state.af = { tps: [], sp: '', ch: '', sa: '', rel: '', nys: false, recent: false };
+  state.tf = { cm: '', tps: [], sp: '', pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
   state.sel = {}; state.exportMsg = ''; state.addMsg = '';
   state.adds = {};
   try { state.adds = JSON.parse(localStorage.getItem('myla-adds') || '{}'); } catch (e) { state.adds = {}; }
@@ -355,6 +355,17 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     if (/committee/.test((b.st || '').toLowerCase())) return 'In committee';
     return 'Other';
   }
+  // Sponsors of a bill and of its same-as bill(s), so a Senate/Assembly pair matches either sponsor.
+  function sponsorsOf(b) {
+    var out = [b.sp];
+    (b.sa || '').split(', ').filter(String).forEach(function (x) { var o = byId(x); if (o && o.sp) out.push(o.sp); });
+    return out.filter(Boolean);
+  }
+  function sponsorOpts(list, current) {
+    var all = [];
+    list.forEach(function (b) { sponsorsOf(b).forEach(function (n) { all.push(n); }); });
+    return opts(all, current, 'Any sponsor');
+  }
   function chamberOf(b) { return /^S/.test(b.p || b.id) ? 'Senate' : 'Assembly'; }
   function committeeOf(b) { return b.cm ? chamberOf(b) + ' ' + titleCase(b.cm) : (b.lc ? titleCase(b.lc) : ''); }
   function titleCase(x) { return String(x || '').toLowerCase().replace(/\b([a-z])/g, function (m) { return m.toUpperCase(); }).replace(/\b(And|Of|The|On|For)\b/g, function (m) { return m.toLowerCase(); }); }
@@ -365,6 +376,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     return list.filter(function (b) {
       if (f.cm && committeeOf(b) !== f.cm) return false;
       if (f.tps.length && !hasAll(b, f.tps)) return false;
+      if (f.sp && sponsorsOf(b).indexOf(f.sp) < 0) return false;
       if (f.pt && (partyOf(b) || 'Unknown') !== f.pt) return false;
       if (f.st && stageOf(b) !== f.st) return false;
       if (f.ch && chamberOf(b) !== f.ch) return false;
@@ -560,6 +572,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     return '<details class="card filters" id="tfbox"' + (state.filtersOpen || active ? ' open' : '') + '><summary>Filters' + (active ? ' (' + nActive + ' on)' : '') + ' <span class="meta">· showing ' + shownCount + ' of ' + all.length + '</span></summary>' +
       '<div class="fgrid">' +
       '<label>Committee<select data-tf="cm">' + opts(all.map(committeeOf), f.cm, 'All committees') + '</select></label>' +
+      '<label>Sponsor<select data-tf="sp">' + sponsorOpts(all, f.sp) + '</select></label>' +
       '<label>Sponsor party<select data-tf="pt">' + opts(all.map(function (b) { return partyOf(b) || 'Unknown'; }), f.pt, 'Any party') + '</select></label>' +
       '<label>Stage<select data-tf="st"><option value="">Any stage</option>' + stagesPresent.map(function (x) { return '<option' + (x === f.st ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' +
       '<label>Chamber<select data-tf="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
@@ -637,6 +650,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var q = state.q.toLowerCase(), f = state.af;
     var list = d.bills.filter(function (b) {
       if (f.tps.length && !hasAll(b, f.tps)) return false;
+      if (f.sp && sponsorsOf(b).indexOf(f.sp) < 0) return false;
       if (f.ch && chamberOf(b) !== f.ch) return false;
       if (f.sa === 'yes' && !b.sa) return false;
       if (f.sa === 'no' && b.sa) return false;
@@ -654,6 +668,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var h = addBox(d) + '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor, law" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
       '<details class="card filters" id="afbox"' + (state.afOpen || nActive ? ' open' : '') + '><summary>Filters' + (nActive ? ' (' + nActive + ' on)' : '') + ' <span class="meta">· ' + list.length + ' bills</span></summary>' +
       '<div class="fgrid">' +
+      '<label>Sponsor<select data-af="sp">' + sponsorOpts(d.bills, f.sp) + '</select></label>' +
       '<label>Chamber<select data-af="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
       '<label>Same-as<select data-af="sa"><option value="">Either</option><option value="yes"' + (f.sa === 'yes' ? ' selected' : '') + '>Has same-as</option><option value="no"' + (f.sa === 'no' ? ' selected' : '') + '>No same-as</option></select></label>' +
       '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option><option value="manual"' + (f.rel === 'manual' ? ' selected' : '') + '>Added by you</option></select></label>' +
