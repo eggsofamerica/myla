@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-21.8',
+    VERSION: '2026-11-21.9',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -47,6 +47,31 @@ globalThis.MyLA = (function () {
     [/clean energy|renewable|offshore wind|energy efficiency|heat pump|electrification|zero[- ]emission|nuclear|transmission|energy storage/ig, 2],
     [/electric|utilit(y|ies)|natural gas|ratepayer|energy law|system benefits?|energy/ig, 1]
   ];
+
+  var TOPICS = [
+    ['Batteries & storage', /batter(y|ies)|energy storage|storage (system|facilit)/i],
+    ['Siting & permitting', /\bsit(e|es|ing)\b|permit|zoning|setback|host communit|land use|office of renewable energy siting|\bores\b|94-c/i],
+    ['Renewables', /renewabl|solar|wind|hydroelectric|hydropower|geothermal|community solar/i],
+    ['Goals & mandates', /\bgoals?\b|\btargets?\b|mandate|portfolio standard|clean energy standard|clcpa|climate leadership|by the year 20\d\d|percent (of|by)|emissions? reduction/i],
+    ['Investment & funding', /\bfund(s|ing)?\b|appropriat|grant|loan|financ|\bbonds?\b|invest|incentive|rebate|tax credit|subsid/i],
+    ['Rates & affordability', /\brates?\b|rate case|afford|arrear|ratepayer|surcharge|tariff|energy burden|shut ?off|termination of (utility )?service|utility bills?/i],
+    ['Utility oversight & PSC', /public service commission|\bpsc\b|department of public service|utility (corporation|compan)|management audit|penalt/i],
+    ['Transmission & grid', /transmission|\bgrid\b|interconnect|distribution system|nyiso|microgrid|reliabil/i],
+    ['Buildings & efficiency', /thermal energy network|district energy|building|heat pump|efficien|electrification|weatheriz|energy code|all-electric|appliance/i],
+    ['Transportation & EVs', /electric vehicle|\bevs?\b|charging|zero[- ]emission (vehicle|bus|truck)|fleet|transportation/i],
+    ['Gas & fossil fuels', /natural gas|gas (service|corporation|utilit|plant)|pipeline|fossil|100[- ]foot|peaker|heating oil|propane/i],
+    ['Nuclear, hydrogen & clean firm', /nuclear|hydrogen|clean firm|small modular|fusion|biofuel|renewable natural gas/i],
+    ['Emissions & climate policy', /emission|greenhouse|climate|carbon|cap[- ]and[- ]invest|rggi|methane/i],
+    ['Public power (NYPA/LIPA)', /power authority|\bnypa\b|long island power|\blipa\b|public power|municipal electric/i],
+    ['Workforce & labor', /labor|workforce|prevailing wage|apprentice|union/i],
+    ['Environmental justice', /disadvantaged communit|environmental justice|frontline/i],
+    ['Data centers & large loads', /data cent|large load|cryptocurrenc|bitcoin/i],
+    ['NYSERDA', /nyserda|energy research and development authority/i]
+  ];
+  function tagTopics(b) {
+    var text = [b.t, b.sm, b.sum].join(' \n ');
+    return TOPICS.filter(function (x) { return x[1].test(text); }).map(function (x) { return x[0]; });
+  }
 
   // ------------------------------------------------------------------ utilities
   function log(msg) {
@@ -246,6 +271,9 @@ globalThis.MyLA = (function () {
     rec.ld = last ? last.date : (st.actionDate || '');
     rec.ls = am.lawSection || '';
     rec.pg = (b.programInfo && b.programInfo.name) || '';
+    rec.dist = sp.member ? (sp.member.districtCode || '') : '';
+    var pc = (b.pastCommittees && b.pastCommittees.items) || [];
+    rec.lc = pc.length ? cap(pc[pc.length - 1].chamber) + ' ' + pc[pc.length - 1].name : '';
     rec.pub = (b.publishedDateTime || '').slice(0, 10);
     rec.u = billUrl(b.basePrintNo, b.session);
     rec.ch = (b.billType && b.billType.chamber) || (String(b.basePrintNo).charAt(0) === 'S' ? 'SENATE' : 'ASSEMBLY');
@@ -696,14 +724,16 @@ globalThis.MyLA = (function () {
         db.events = db.events.filter(function (e) { return e.id > db.acked; });
         break;
       }
+      case 'party': { db.party = db.party || {}; if (op.name && op.party && op.party !== '?') db.party[op.name] = String(op.party).slice(0, 12); break; }
       case 'resummarize': { var r = db.bills[op.id]; if (r) { delete r.sum; delete r.sumQueued; queueSummary(db, op.id); } break; }
       default: log('inbox: unknown op ' + op.op);
     }
   }
 
   // ------------------------------------------------------------------ outputs
+  var PARTY = {};
   function compact(b) {
-    return { id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
+    return { pt: PARTY[b.sp] || '', lc: b.lc || '', ch: b.ch || '', tp: tagTopics(b), id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
   }
   function mergeHist(b) {
     var hist = b.hist || [], seen = {};
@@ -714,6 +744,7 @@ globalThis.MyLA = (function () {
     return all.slice(0, 300);
   }
   function writeOutputs(db, n) {
+    PARTY = db.party || {};
     var session = db.session;
     var bills = Object.keys(db.bills).map(function (k) { return db.bills[k]; })
       .filter(function (b) { return String(b.s) === String(session) && b.rel !== 'exclude' && (b.tr || !/^stricken/i.test(b.st || '')); });
@@ -902,7 +933,22 @@ globalThis.MyLA = (function () {
     try {
       rollSession(db, n);
       if (ingest(db)) did.push('inbox');
-      var noHist = Object.keys(db.bills).filter(function (k) { return db.bills[k].tr && !db.bills[k].hist && db.queue.refetch.indexOf(k) < 0; });
+      db.party = db.party || {}; db.partyAsked = db.partyAsked || {};
+      var need = {};
+      Object.keys(db.bills).forEach(function (k) {
+        var b = db.bills[k];
+        if (!b.tr) return;
+        [b].concat((b.sa || '').split(', ').filter(String).map(function (x) { return db.bills[x]; })).forEach(function (r) {
+          if (r && r.sp && !/budget bill|rules committee/i.test(r.sp) && !db.party[r.sp] && !(db.partyAsked[r.sp] && db.partyAsked[r.sp] > fmt(new Date(Date.now() - 3 * 864e5), 'yyyy-MM-dd'))) need[r.sp] = { name: r.sp, chamber: cap(r.ch), district: r.dist || '' };
+        });
+      });
+      var needList = Object.keys(need).map(function (k) { return need[k]; });
+      if (needList.length) {
+        needList.forEach(function (m) { db.partyAsked[m.name] = nyNow().day; });
+        addEvent(db, { type: 'party_needed', members: needList });
+        did.push('party');
+      }
+      var noHist = Object.keys(db.bills).filter(function (k) { var b = db.bills[k]; return b.tr && (!b.hist || b.dist === undefined) && db.queue.refetch.indexOf(k) < 0; });
       if (noHist.length) { db.queue.refetch = db.queue.refetch.concat(noHist); did.push('history'); }
       try { if (syncSheetTracking(db)) did.push('sheet'); } catch (e) { log('sheet sync failed: ' + e); }
       if (db.backfill && db.backfill.stage !== 'done') {

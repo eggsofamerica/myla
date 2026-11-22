@@ -36,10 +36,11 @@ assert(d.bills.find(b => b.id === 'S100-2025').tr && d.bills.find(b => b.id === 
 const sn = ev.filter(e => e.type === 'summary_needed');
 assert(sn.length === 1 && files[sn[0].fileId] && /BILL TEXT/.test(files[sn[0].fileId].content), 'one summary queued with text file');
 assert(!ev.some(e => e.id <= maxId), 'acked events removed');
+assert(ev.some(e => e.type === 'party_needed' && e.members.some(m => m.name === 'Jane Doe') && e.members.some(m => m.name === 'John Roe')), 'party asked for sponsor and same-as sponsor');
 assert(Object.values(files).filter(f => f.parent === INBOX && !f.trashed).length === 0, 'inbox emptied');
 
 // 4. Claude writes summary
-mkFile('op3.json', JSON.stringify({ ops: [{ op: 'summary', id: 'S100-2025', text: 'Creates a thermal energy network program.' }, { op: 'ack', upTo: Math.max(...ev.map(e => e.id)) }, { op: 'hearing', key: d.hearings.find(h => h.match).key, relevant: true }] }), INBOX);
+mkFile('op3.json', JSON.stringify({ ops: [{ op: 'summary', id: 'S100-2025', text: 'Creates a thermal energy network program.' }, { op: 'ack', upTo: Math.max(...ev.map(e => e.id)) }, { op: 'party', name: 'Jane Doe', party: 'D' }, { op: 'hearing', key: d.hearings.find(h => h.match).key, relevant: true }] }), INBOX);
 // 5. Next slot: S100 gets action, vote and agenda; new bill appears; budget bill amended (outside session window -> budget not checked)
 const b = API.DB['S100-2025'];
 b.actions.items.push({ date: '2026-11-23', chamber: 'SENATE', sequenceNo: 2, text: 'REPORTED AND COMMITTED TO FINANCE' });
@@ -51,10 +52,14 @@ setNow('2026-11-24T12:05:00Z'); // Tue 7:05
 MyLA.tick();
 d = data(); ev = events().events;
 const s100b = d.bills.find(x => x.id === 'S100-2025');
+assert(s100b.pt === 'D' && s100b.tp.length > 0, 'party and topics on bill: ' + s100b.pt + ' ' + JSON.stringify(s100b.tp));
 assert(s100b.sum === 'Creates a thermal energy network program.' && d.bills.find(x => x.id === 'A200-2025').sum, 'summary stored on both bills');
 const types = ev.map(e => e.type);
+console.log('   hist:', JSON.stringify(d.bills.find(x => x.id === 'S100-2025').ev.slice(0,4)));
 assert(types.includes('bill_action') && types.includes('bill_vote') && types.includes('bill_agenda'), 'tracked bill events: ' + types.join(','));
 console.log('   ', ev.filter(e => e.bill).map(e => e.detail).join(' | '));
+const pn = ev.find(e => e.type === 'party_needed'); console.log('   party_needed:', JSON.stringify(pn && pn.members));
+console.log('   topics:', JSON.stringify(d.bills.find(x => x.id === 'S100-2025').tp), 'lc:', d.bills.find(x => x.id === 'S100-2025').lc);
 const nb = ev.find(e => e.type === 'new_bills');
 assert(nb && nb.bills.length === 1 && nb.bills[0].id === 'S900-2025', 'new bill event for S900');
 assert(d.hearings.find(h => h.match).rel === true, 'hearing relevance stored');
