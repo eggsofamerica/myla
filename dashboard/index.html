@@ -106,6 +106,7 @@ details.fold .timeline { margin-top: 6px; }
 .chip .cnt { opacity: .6; font-size: 11px; margin-left: 2px; }
 .exportbar { gap: 8px; }
 .exportbar .row { gap: 6px; }
+.exportbar .xl { min-width: 88px; }
 .selbox { width: 24px; height: 24px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--card); color: var(--card); font: 700 14px/1 var(--body); cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
 .selbox[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
 .card.selected { box-shadow: 0 0 0 2px var(--accent-soft); }
@@ -380,7 +381,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var n = all.filter(function (b) { return state.sel[b.id]; }).length;
     return '<div class="card exportbar"><div class="row"><span class="meta" style="flex:1;min-width:150px">' + (n ? n + ' selected for export' : 'Tick bills to export them, or select all shown.') + '</span>' +
       '<button class="btn ghost small" id="selall">Select all shown</button>' + (n ? '<button class="btn ghost small" id="selnone">Clear</button>' : '') + '</div>' +
-      (n ? '<div class="row"><button class="btn small" data-export="doc">Export to Google Doc</button><button class="btn small" data-export="sheet">Export to Google Sheet</button><button class="btn ghost small" data-export="copy">Copy as text</button></div>' : '') +
+      (n ? '<div class="row"><span class="meta xl">Google Drive:</span><button class="btn small" data-export="doc">Google Doc</button><button class="btn small" data-export="sheet">Google Sheet</button></div>' +
+           '<div class="row"><span class="meta xl">Download:</span><button class="btn small" data-export="docx">Word (.docx)</button><button class="btn small" data-export="xlsx">Excel (.xlsx)</button><button class="btn ghost small" data-export="copy">Copy as text</button></div>' : '') +
       (state.exportMsg ? '<div class="meta">' + state.exportMsg + '</div>' : '') + '</div>';
   }
   function selectedBills() { return pairs(state.data.bills.filter(isTracked)).filter(function (b) { return state.sel[b.id]; }); }
@@ -406,9 +408,87 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var rows = list.map(function (b) { return [b.p, (b.sa || '').replace(/-\d{4}/g, ''), b.t, b.sp, b.pt, committeeOf(b), stageOf(b), b.st, b.ld, b.la, (b.tp || []).join('; '), nysRole(b) ? 'Yes' : 'No', b.u, b.sum]; });
     return [head].concat(rows).map(function (r) { return r.map(csvCell).join(','); }).join('\n');
   }
+  var LIBS = { XLSX: 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', docx: 'https://unpkg.com/docx@8.5.0/build/index.umd.js' };
+  function loadLib(name) {
+    if (window[name]) return Promise.resolve(window[name]);
+    return new Promise(function (res, rej) {
+      var sc = document.createElement('script'); sc.src = LIBS[name];
+      sc.onload = function () { window[name] ? res(window[name]) : rej(new Error('library did not load')); };
+      sc.onerror = function () { rej(new Error('could not load the ' + (name === 'XLSX' ? 'Excel' : 'Word') + ' library')); };
+      document.head.appendChild(sc);
+    });
+  }
+  function exportRows(list) {
+    return list.map(function (b) { return [b.p, (b.sa || '').replace(/-\d{4}/g, ''), b.t, b.sp, b.pt || '', committeeOf(b), stageOf(b), b.st || '', b.ld || '', b.la || '', (b.tp || []).join('; '), nysRole(b) ? 'Yes' : 'No', b.u, (b.sum || '').replace(/\*\*/g, '')]; });
+  }
+  var EXPORT_HEAD = ['Bill', 'Same as', 'Title', 'Sponsor', 'Party', 'Committee', 'Stage', 'Status', 'Last action date', 'Last action', 'Topics', 'NYSERDA role', 'Link', 'Summary'];
+  function buildXlsx(list) {
+    return loadLib('XLSX').then(function (X) {
+      var ws = X.utils.aoa_to_sheet([EXPORT_HEAD].concat(exportRows(list)));
+      ws['!cols'] = [8, 10, 50, 20, 6, 30, 18, 20, 12, 30, 30, 8, 45, 90].map(function (w) { return { wch: w }; });
+      ws['!autofilter'] = { ref: ws['!ref'] };
+      var wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Tracked bills');
+      return new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })]);
+    });
+  }
+  function runsFrom(D, text) {
+    // **bold** spans become bold runs
+    var out = [], parts = String(text).split(/(\*\*[^*]+\*\*)/);
+    parts.forEach(function (p) { if (!p) return; var m = p.match(/^\*\*([^*]+)\*\*$/); out.push(new D.TextRun(m ? { text: m[1], bold: true } : { text: p })); });
+    return out;
+  }
+  function buildDocx(list) {
+    return loadLib('docx').then(function (D) {
+      var kids = [new D.Paragraph({ text: 'MyLA tracked bills', heading: D.HeadingLevel.TITLE }),
+        new D.Paragraph({ children: [new D.TextRun({ text: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) + ' · ' + list.length + ' bill' + (list.length > 1 ? 's' : ''), color: '666666' })] })];
+      list.forEach(function (b) {
+        var sa = (b.sa || '').split(', ').filter(String).map(function (x) { return x.split('-')[0]; }).join(', ');
+        kids.push(new D.Paragraph({ text: b.p + ': ' + b.t, heading: D.HeadingLevel.HEADING_2, spacing: { before: 280 } }));
+        [['Sponsor', b.sp + (b.pt ? ' (' + b.pt + ')' : '') + (b.co ? ', ' + b.co + ' cosponsors' : '')], ['Same as', sa || 'none'], ['Committee', committeeOf(b) || 'n/a'],
+         ['Status', (b.st || '') + (b.ld ? ' (last action ' + fmtDate(b.ld) + ': ' + (b.la || '').toLowerCase() + ')' : '')], ['Topics', (b.tp || []).join(', ') || 'n/a']].forEach(function (kv) {
+          kids.push(new D.Paragraph({ children: [new D.TextRun({ text: kv[0] + ': ', bold: true }), new D.TextRun(kv[1])] }));
+        });
+        kids.push(new D.Paragraph({ children: [new D.TextRun({ text: 'Link: ', bold: true }), new D.ExternalHyperlink({ link: b.u, children: [new D.TextRun({ text: b.u, style: 'Hyperlink' })] })] }));
+        if (b.sum) {
+          kids.push(new D.Paragraph({ text: 'Summary', heading: D.HeadingLevel.HEADING_3 }));
+          String(b.sum).split('\n').forEach(function (line) {
+            var t = line.trim(); if (!t) return;
+            if (/^[-•*]\s+/.test(t)) kids.push(new D.Paragraph({ children: runsFrom(D, t.replace(/^[-•*]\s+/, '')), bullet: { level: 0 } }));
+            else kids.push(new D.Paragraph({ children: runsFrom(D, t) }));
+          });
+        }
+        if (b.ev && b.ev.length) {
+          kids.push(new D.Paragraph({ text: 'Recent activity', heading: D.HeadingLevel.HEADING_3 }));
+          b.ev.slice(0, 5).forEach(function (e) { kids.push(new D.Paragraph({ text: fmtDate(e.d) + ': ' + e.t, bullet: { level: 0 } })); });
+        }
+      });
+      return D.Packer.toBlob(new D.Document({ styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } }, sections: [{ children: kids }] }));
+    });
+  }
+  function saveFile(kind, btn, list) {
+    var label = kind === 'docx' ? 'Word' : 'Excel';
+    btn.disabled = true; btn.textContent = 'Building…';
+    var name = 'MyLA tracked bills ' + new Date().toISOString().slice(0, 10) + '.' + kind;
+    (kind === 'docx' ? buildDocx(list) : buildXlsx(list)).then(function (blob) {
+      return claude.use('downloads').then(function (dl) {
+        if (!dl) throw { code: 'unavailable' };
+        return dl.save({ filename: name, data: blob });
+      });
+    }).then(function () {
+      state.exportMsg = label + ' file saved: ' + esc(name) + '.'; render();
+    }).catch(function (e) {
+      var code = e && e.code;
+      state.exportMsg = code === 'declined' ? 'Download cancelled.' :
+        code === 'unavailable' || code === 'not_granted' ? 'Downloads aren\'t available in this view. Open MyLA on claude.ai, or use the Google Drive export.' :
+        code === 'rate_limited' ? 'Another download prompt is open. Finish it, then try again.' :
+        'Couldn\'t build the ' + label + ' file' + (e && e.message ? ': ' + esc(String(e.message).slice(0, 120)) : '.');
+      render();
+    });
+  }
   function doExport(kind, btn) {
     var list = selectedBills();
     if (!list.length) return;
+    if (kind === 'docx' || kind === 'xlsx') { saveFile(kind, btn, list); return; }
     if (kind === 'copy') {
       var txt = exportMarkdown(list);
       try { navigator.clipboard.writeText(txt).then(function () { state.exportMsg = 'Copied ' + list.length + ' bill' + (list.length > 1 ? 's' : '') + ' to the clipboard.'; render(); }, function () { state.exportMsg = 'Your browser blocked copying. Use Export to Google Doc instead.'; render(); }); }
