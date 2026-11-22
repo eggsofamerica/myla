@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-21.12',
+    VERSION: '2026-11-22.1',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -749,16 +749,40 @@ globalThis.MyLA = (function () {
         db.events = db.events.filter(function (e) { return e.id > db.acked; });
         break;
       }
+      case 'add': {
+        // Manually added bill (any topic). op.id like "S1234-2025"; op.track to track it too.
+        var m = String(op.id || '').toUpperCase().match(/^([SA])0*(\d+)[A-Z]?-(\d{4})$/);
+        if (!m) { noteAddFail(db, op.id, 'not a Senate or Assembly bill number'); break; }
+        var aid = m[1] + m[2] + '-' + m[3];
+        if (Number(m[3]) !== Number(db.session)) { noteAddFail(db, aid, 'only bills from the current ' + db.session + '–' + (Number(db.session) + 1) + ' session can be added'); break; }
+        var existed = !!db.bills[aid];
+        if (!existed) refreshBills(db, [aid], {});
+        var ar = db.bills[aid];
+        if (!ar) { noteAddFail(db, aid, 'not found in the legislature\'s data'); break; }
+        if (db.excluded) delete db.excluded[aid];
+        if (!existed || ar.rel === 'exclude') { ar.rel = 'manual'; ar.manual = true; }
+        db.addFailed = (db.addFailed || []).filter(function (x) { return x.id !== aid; });
+        log('added ' + aid + ' by hand' + (op.track ? ' and tracking' : ''));
+        if (op.track) setTracked(db, aid, true);
+        break;
+      }
       case 'party': { db.party = db.party || {}; if (op.name && op.party && op.party !== '?') db.party[op.name] = String(op.party).slice(0, 12); break; }
       case 'resummarize': { var r = db.bills[op.id]; if (r) { delete r.sum; delete r.sumQueued; queueSummary(db, op.id); } break; }
       default: log('inbox: unknown op ' + op.op);
     }
   }
 
+  function noteAddFail(db, id, why) {
+    db.addFailed = (db.addFailed || []).filter(function (x) { return x.id !== id; });
+    db.addFailed.unshift({ id: String(id || ''), why: why, at: nyNow().iso });
+    if (db.addFailed.length > 10) db.addFailed.length = 10;
+    log('add failed for ' + id + ': ' + why);
+  }
+
   // ------------------------------------------------------------------ outputs
   var PARTY = {};
   function compact(b) {
-    return { pt: PARTY[b.sp] || '', lc: b.lc || '', ch: b.ch || '', tp: tagTopics(b), id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
+    return { pt: PARTY[b.sp] || '', lc: b.lc || '', ch: b.ch || '', tp: tagTopics(b), id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, man: !!b.manual, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
   }
   function mergeHist(b) {
     var hist = b.hist || [], seen = {};
@@ -783,7 +807,8 @@ globalThis.MyLA = (function () {
       hearings: hearings.map(function (h) { return { key: h.key, date: h.date, subject: h.subject, text: h.text, url: h.link, found: h.found, match: h.match, rel: h.rel, note: h.note || '' }; }),
       budget: { briefs: db.budget.briefs.slice(0, 20), bills: Object.keys(db.budget.bills).map(function (k) { var x = db.budget.bills[k]; return { id: x.id, b: x.b, t: x.t, v: x.v, st: x.st, u: x.u, versions: x.versions }; }) },
       activity: db.activity.slice(0, 150),
-      errors: db.errors.slice(0, 5)
+      errors: db.errors.slice(0, 5),
+      addFailed: (db.addFailed || []).slice(0, 5)
     };
     DriveApp.getFileById(CFG.DATA).setContent(JSON.stringify(data));
     DriveApp.getFileById(CFG.EVENTS).setContent(JSON.stringify({ updated: n.iso, acked: db.acked, events: db.events.filter(function (e) { return e.id > db.acked; }).slice(-150) }, null, 1));

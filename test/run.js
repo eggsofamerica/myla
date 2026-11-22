@@ -95,6 +95,15 @@ MyLA.tick();
 d = data();
 console.log('DBG', d.asof, d.bills.filter(x=>x.tr).map(x=>x.id), JSON.stringify(sheets['Bills'].slice(0,5).map(x=>x&&x.slice(0,2))));
 assert(!d.bills.find(x => x.id === 'S100-2025').tr && !d.bills.find(x => x.id === 'A200-2025').tr, 'untracked via sheet checkbox');
+// 7b. Manual add: an off-topic bill (S300 farm bill, excluded by filters) added and tracked; a bad number fails
+mkFile('add1.json', JSON.stringify({ op: 'add', id: 'S300-2025', track: true }), INBOX);
+mkFile('add2.json', JSON.stringify({ op: 'add', id: 'S99999-2025', track: false }), INBOX);
+setNow('2026-11-24T18:10:00Z');
+MyLA.tick();
+d = data();
+const s300 = d.bills.find(x => x.id === 'S300-2025');
+assert(s300 && s300.rel === 'manual' && s300.tr && s300.man, 'manual add of off-topic bill, tracked: ' + JSON.stringify(s300 && {rel: s300.rel, tr: s300.tr}));
+assert(d.addFailed && d.addFailed[0].id === 'S99999-2025', 'failed add reported: ' + JSON.stringify(d.addFailed));
 // 8. Session rollover
 setNow('2027-01-01T13:00:00Z');
 API.state.updated = [];

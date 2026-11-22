@@ -114,6 +114,7 @@ details.fold .timeline { margin-top: 6px; }
 .gaps > summary { font-size: 13px; color: var(--muted); font-weight: 600; }
 .gaps ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; max-width: 70ch; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag.man { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
 .party { font: 600 11px var(--body); padding: 1px 6px; border-radius: 4px; background: var(--paper); border: 1px solid var(--line); }
 .party.pD { color: #1d4f9c; border-color: #9db7e3; } .party.pR { color: #a3261e; border-color: #e3a49f; }
@@ -163,7 +164,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   state.ui = {};
   state.af = { tps: [], ch: '', sa: '', rel: '', nys: false, recent: false };
   state.tf = { cm: '', tps: [], pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
-  state.sel = {}; state.exportMsg = '';
+  state.sel = {}; state.exportMsg = ''; state.addMsg = '';
+  state.adds = {};
+  try { state.adds = JSON.parse(localStorage.getItem('myla-adds') || '{}'); } catch (e) { state.adds = {}; }
+  function saveAdds() { try { localStorage.setItem('myla-adds', JSON.stringify(state.adds)); } catch (e) {} }
   function isOn(v) { return Array.isArray(v) ? v.length > 0 : !!v; }
   function clearF(f) { Object.keys(f).forEach(function (k) { f[k] = Array.isArray(f[k]) ? [] : (typeof f[k] === 'boolean' ? false : ''); }); }
   function hasAll(b, tps) { return tps.every(function (t) { return (b.tp || []).indexOf(t) >= 0; }); }
@@ -252,12 +256,14 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       .then(function (r) {
         var p = r && r.payload, files = (p && p.files) || [];
         files.forEach(function (f) {
+          var a = String(f.title || '').match(/^add__([A-Z]\d+-\d{4})__(\d+)\.json$/);
+          if (a) { if (!state.adds[a[1]]) state.adds[a[1]] = { at: Number(a[2]) }; return; }
           var m = String(f.title || '').match(/^(track|untrack)__([A-Z]\d+-\d{4})__(\d+)\.json$/);
           if (!m) return;
           var at = Number(m[3]), cur = state.pending[m[2]];
           if (!cur || cur.at <= at) state.pending[m[2]] = { on: m[1] === 'track', at: at };
         });
-        savePending(); render();
+        savePending(); saveAdds(); render();
       })
       .catch(function () {});
   }
@@ -291,6 +297,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     // drop pending flags that have landed
     Object.keys(state.pending).forEach(function (id) { var b = byId(id); if (b && b.tr === state.pending[id].on) delete state.pending[id]; else if (Date.now() - state.pending[id].at > 3 * 3600e3) delete state.pending[id]; });
     savePending();
+    Object.keys(state.adds).forEach(function (id) { if (byId(id) || Date.now() - state.adds[id].at > 6 * 3600e3) delete state.adds[id]; });
+    saveAdds();
     var bf = d.backfill;
     if (d.errors && d.errors.length && daysAgo(d.errors[0].at) < 1.5) showBanner('Last check reported a problem: ' + esc(d.errors[0].msg), 'warn');
     else if (bf && bf.stage !== 'done') showBanner('Loading the ' + d.session + '–' + (Number(d.session) + 1) + ' session: ' + (bf.total ? (bf.total - (bf.ids ? bf.ids.length : 0)) + ' of ' + bf.total + ' bills read' : 'searching') + '. This finishes on its own within the hour.', 'warn');
@@ -375,6 +383,38 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   }
   function gaps(items) {
     return '<details class="gaps"><summary>Coverage gaps</summary><ul>' + items.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></details>';
+  }
+  // "S.1234-A", "a01234", "S 1234" -> "S1234"; null if not a Senate/Assembly bill number
+  function parseBillNo(raw) {
+    var m = String(raw || '').toUpperCase().replace(/[\s.]/g, '').match(/^([SA])0*(\d{1,5})(-?[A-Z])?$/);
+    return m ? m[1] + m[2] : null;
+  }
+  function addBox(d) {
+    var pend = Object.keys(state.adds).filter(function (id) { return !byId(id) && !(d.addFailed || []).some(function (f) { return f.id === id && f.at > new Date(state.adds[id].at).toISOString().slice(0, 19); }); });
+    var fails = (d.addFailed || []).filter(function (f) { return daysAgo(f.at) < 2; });
+    return '<details class="card filters" id="addbox"' + (state.addOpen ? ' open' : '') + '><summary>Add a bill by number</summary>' +
+      '<p class="meta">For a bill MyLA missed, or one on another topic. Current session (' + d.session + '–' + (Number(d.session) + 1) + ') only.</p>' +
+      '<div class="tools"><input id="addno" type="text" inputmode="text" autocapitalize="characters" placeholder="e.g. S1234 or A05678" aria-label="Bill number" style="flex:1 1 160px">' +
+      '<button class="btn small" data-add="track">Add and track</button><button class="btn ghost small" data-add="list">Add to All bills</button></div>' +
+      (state.addMsg ? '<p class="meta">' + state.addMsg + '</p>' : '') +
+      (pend.length ? '<p class="meta">Adding ' + pend.map(function (id) { return '<strong>' + esc(num(id)) + '</strong>'; }).join(', ') + '… It appears within about 5 minutes.</p>' : '') +
+      (fails.length ? '<p class="meta">' + fails.map(function (f) { return 'Couldn\'t add <strong>' + esc(num(f.id)) + '</strong>: ' + esc(f.why) + '.'; }).join('<br>') + '</p>' : '') +
+      '</details>';
+  }
+  function addBill(mode, btn) {
+    var d = state.data; if (!d || !state.mcp) return;
+    var input = $('addno'), no = parseBillNo(input && input.value);
+    if (!no) { state.addMsg = 'Enter a Senate or Assembly bill number, like S1234 or A5678.'; state.addOpen = true; render(); return; }
+    var id = no + '-' + d.session, have = byId(id);
+    if (have) {
+      if (mode === 'track' && !isTracked(have)) { state.addMsg = no + ' is already in MyLA; tracking it now.'; state.addOpen = true; setTrack(id, true, btn); return; }
+      state.addMsg = no + ' is already in MyLA' + (isTracked(have) ? ' and tracked.' : '. Find it under All bills.'); state.addOpen = true; render(); return;
+    }
+    btn.disabled = true; btn.textContent = 'Adding…';
+    var op = { op: 'add', id: id, track: mode === 'track', at: new Date().toISOString() };
+    state.mcp.callTool(SERVER, 'create_file', { title: 'add__' + id + '__' + Date.now() + '.json', parentId: INBOX, contentMimeType: 'text/plain', textContent: JSON.stringify(op), disableConversionToGoogleType: true }, { cache: false })
+      .then(function () { state.adds[id] = { at: Date.now(), track: mode === 'track' }; saveAdds(); state.addMsg = ''; state.addOpen = true; render(); })
+      .catch(function (e) { state.addMsg = errorBanner(e); state.addOpen = true; render(); });
   }
   function toggleIn(arr, v) { var i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
   function exportBar(all) {
@@ -544,6 +584,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<div class="meta">' + esc(b.sp) + (b.pt ? ' <span class="party p' + esc(b.pt.charAt(0)) + '">' + esc(b.pt) + '</span>' : '') + (b.co ? ' + ' + b.co + ' cosponsor' + (b.co > 1 ? 's' : '') : '') + (b.pg ? ' · Program bill: ' + esc(b.pg) : '') + (b.ls ? ' · ' + esc(b.ls) : '') + '</div>' +
       (tr ? '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>' : '<div class="meta">Introduced ' + esc(fmtDate(b.pub)) + '</div>') +
       (full && committeeOf(b) ? '<div class="meta">Committee: ' + esc(committeeOf(b)) + (b.cm ? '' : ' (last)') + '</div>' : '') +
+      (b.man ? '<div class="tags"><span class="tag man">Added by you</span></div>' : '') +
       ((b.tp || []).length ? '<div class="tags">' + b.tp.map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '');
     if (full) {
       var ui = state.ui[b.id] || {};
@@ -585,9 +626,9 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   }
   function viewTracked(d) {
     var list = pairs(d.bills.filter(isTracked));
-    if (!list.length && !Object.keys(state.pending).length) return '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
+    if (!list.length && !Object.keys(state.pending).length) return addBox(d) + '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
     var shown = trackedFiltered(list);
-    return '<div class="list">' + runBar(d) + filterBar(list, shown.length) + exportBar(list) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>' +
+    return '<div class="list">' + runBar(d) + addBox(d) + filterBar(list, shown.length) + exportBar(list) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>' +
       gaps(['<strong>Committee agendas:</strong> Senate committee agendas arrive ahead of the meeting, so you get a heads-up before a Senate committee vote. The Assembly does not publish its committee agendas in the data feed, so Assembly committee action shows up only after it is recorded on the bill (for example, "reported" or "held").',
         '<strong>Sponsor party:</strong> not in the legislature\'s data. Claude looks it up for the sponsors of tracked bills and their same-as bills; a new sponsor shows no badge until the next check.',
         '<strong>Topics:</strong> tagged automatically from bill titles and summaries by keyword, so a tag can occasionally be off or missing.']);
@@ -610,12 +651,12 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var topics = [];
     d.bills.forEach(function (b) { (b.tp || []).forEach(function (t) { topics.push(t); }); });
     var nActive = Object.keys(f).filter(function (k) { return isOn(f[k]); }).length;
-    var h = '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor, law" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
+    var h = addBox(d) + '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor, law" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
       '<details class="card filters" id="afbox"' + (state.afOpen || nActive ? ' open' : '') + '><summary>Filters' + (nActive ? ' (' + nActive + ' on)' : '') + ' <span class="meta">· ' + list.length + ' bills</span></summary>' +
       '<div class="fgrid">' +
       '<label>Chamber<select data-af="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
       '<label>Same-as<select data-af="sa"><option value="">Either</option><option value="yes"' + (f.sa === 'yes' ? ' selected' : '') + '>Has same-as</option><option value="no"' + (f.sa === 'no' ? ' selected' : '') + '>No same-as</option></select></label>' +
-      '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option></select></label>' +
+      '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option><option value="manual"' + (f.rel === 'manual' ? ' selected' : '') + '>Added by you</option></select></label>' +
       '</div>' + topicChips(list, f.tps, 'data-atp') + '<div class="tools">' +
       '<button class="chip" data-aft="nys" aria-pressed="' + !!f.nys + '">Mentions NYSERDA</button>' +
       '<button class="chip" data-aft="recent" aria-pressed="' + !!f.recent + '">Introduced in last 2 weeks</button>' +
@@ -682,6 +723,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var f = e.target.closest('[data-filter]'); if (f) { state.filter = f.dataset.filter; state.shown = 60; render(); return; }
     if (e.target.id === 'more') { state.shown += 60; render(); }
     if (e.target.id === 'runcheck') { runCheck(e.target); }
+    var ab = e.target.closest('[data-add]'); if (ab) { addBill(ab.dataset.add, ab); }
     var at = e.target.closest('[data-aft]'); if (at) { state.af[at.dataset.aft] = !state.af[at.dataset.aft]; state.shown = 60; render(); }
     if (e.target.id === 'afclear') { clearF(state.af); render(); }
     var ap = e.target.closest('[data-atp]'); if (ap) { toggleIn(state.af.tps, ap.dataset.atp); state.shown = 60; render(); }
@@ -699,6 +741,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   $('view').addEventListener('toggle', function (e) {
     var d = e.target; if (d.id === 'tfbox') { state.filtersOpen = d.open; return; }
     if (d.id === 'afbox') { state.afOpen = d.open; return; }
+    if (d.id === 'addbox') { state.addOpen = d.open; return; }
     if (!d.dataset || !d.dataset.fold) return;
     var u = state.ui[d.dataset.id] = state.ui[d.dataset.id] || {};
     if (d.dataset.fold === 'sum') u.sumClosed = !d.open; else u.actOpen = d.open;
@@ -709,6 +752,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     if (ds.tf) { state.tf[ds.tf] = e.target.value; render(); }
     if (ds.af) { state.af[ds.af] = e.target.value; state.shown = 60; render(); }
   });
+  $('view').addEventListener('keydown', function (e) { if (e.target.id === 'addno' && e.key === 'Enter') { e.preventDefault(); var b = document.querySelector('[data-add="track"]'); if (b) addBill('track', b); } });
   $('view').addEventListener('input', function (e) { if (e.target.id === 'q') { state.q = e.target.value; state.shown = 60; render(); } });
   function fromHash() { var h = (location.hash || '').slice(1); if (['tracked', 'bills', 'hearings', 'budget', 'activity'].indexOf(h) >= 0) state.tab = h; }
   window.addEventListener('hashchange', function () { fromHash(); render(); });
