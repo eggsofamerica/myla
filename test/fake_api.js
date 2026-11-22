@@ -38,6 +38,7 @@ const DB = {
   'S3003-2025': bill('S3003', 2025, 'Enacts into law major components of legislation necessary to implement the state education, labor and family assistance budget for the 2025-2026 state fiscal year', { budget: true, text: BUDGET_TEXT.replace('New York state energy research and development authority', 'state energy office') }),
   'S3006-2025': bill('S3006', 2025, 'Enacts into law major components of legislation necessary to implement the state transportation, economic development and environmental conservation budget', { budget: true, text: BUDGET_TEXT }),
 };
+const RES = { 'J1952-2025': Object.assign(bill('J1952', 2025, 'Resolution in response to the 2026-2027 Executive Budget submission', { text: 'RESOLVED, That the Senate rejects the transfer of $50 million from NYSERDA to the general fund and supports offshore wind.' }), { billType: { chamber: 'SENATE', resolution: true } }) };
 const NEW_LATER = { 'S900-2025': bill('S900', 2025, 'Relates to offshore wind transmission', { pub: '2026-11-23T09:00:00', law: 'Public Service Law' }) };
 function ok(obj) { return { code: 200, body: JSON.stringify(Object.assign({ success: true, message: '' }, obj)) }; }
 function list(items) { return ok({ total: items.length, offsetStart: 1, offsetEnd: items.length, limit: 1000, result: { items, size: items.length } }); }
@@ -57,7 +58,8 @@ function handle(url) {
     const term = u.searchParams.get('term');
     const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {});
     let items = Object.values(all);
-    if (/sponsor\.budget:true/.test(term)) items = items.filter(b => b.sponsor.budget);
+    if (/billType\.resolution:true/.test(term)) items = state.resOn ? Object.values(RES) : [];
+    else if (/sponsor\.budget:true/.test(term)) items = items.filter(b => b.sponsor.budget);
     else if (/lawSection/.test(term)) items = items.filter(b => !b.sponsor.budget && b.amendments.items[b.activeVersion].lawSection === 'Public Service Law');
     else if (/^\(summary:/.test(term)) items = [];
     else items = items.filter(b => !b.sponsor.budget);
@@ -66,7 +68,7 @@ function handle(url) {
   }
   if ((m = p.match(/^\/bills\/updates\/(.+)$/))) return list(state.updated.map(id => ({ id: { basePrintNo: id.split('-')[0], session: +id.split('-')[1] }, contentType: 'BILL' })));
   if ((m = p.match(/^\/bills\/(\d+)\/([A-Z]\d+)$/))) {
-    const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {});
+    const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {}, RES);
     const b = all[m[2] + '-' + m[1]];
     if (!b) return { code: 404, body: '{"success":false}' };
     return ok({ responseType: 'bill', result: b });

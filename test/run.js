@@ -79,6 +79,13 @@ if (bp) {
   const t = files[bp.bills[0].fileId].content;
   assert(/PART B/.test(t) && /PART D/.test(t) && !/PART A/.test(t), 'budget excerpt keeps energy parts only (B, D) — kept: ' + bp.bills[0].kept);
 }
+// 6b. One-house resolution appears (first forced check seeded resolutions as empty set)
+API.state.resOn = true;
+setNow('2026-11-24T17:20:00Z');
+MyLA.checkNow();
+ev = events().events;
+const br = ev.find(e => e.type === 'budget_resolution');
+assert(br && br.house === 'Senate' && /NYSERDA/.test(files[br.fileId].content), 'one-house resolution queued: ' + JSON.stringify(br && {h: br.house, b: br.bill}));
 // 7. Sheet checkbox untrack
 const rows = sheets['Bills'];
 const r = rows.findIndex(x => x && x[1] === 'S100-2025');

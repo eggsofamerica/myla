@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-21.11',
+    VERSION: '2026-11-21.12',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -671,6 +671,31 @@ globalThis.MyLA = (function () {
     }
   }
 
+  // One-house budget resolutions: each house's statement of its budget positions (mid-March).
+  function checkBudgetResolutions(db, n, session, seedOnly) {
+    db.budget.res = db.budget.res || {};
+    var items = [];
+    try { items = searchAll(session, 'billType.resolution:true AND title:("Executive Budget")', 100); }
+    catch (e) { log('budget resolution search failed: ' + String(e).slice(0, 150)); return; }
+    var fresh = items.filter(function (r) { return r && r.basePrintNo && !db.budget.res[billId(r.basePrintNo, r.session || session)]; });
+    fresh.forEach(function (r) {
+      var id = billId(r.basePrintNo, r.session || session);
+      if (seedOnly || timeLeft() < 60000) { if (seedOnly) db.budget.res[id] = { seen: nyNow().day, seeded: true }; return; }
+      var j = api('/bills/' + (r.session || session) + '/' + r.basePrintNo, { view: 'default', fullTextFormat: 'PLAIN' });
+      if (!j || !j.result) return;
+      var b = j.result, am = pickAmendment(b), text = am.fullText || '';
+      if (!/executive budget/i.test(b.title || '')) { db.budget.res[id] = { seen: nyNow().day, skipped: true }; return; }
+      var house = (b.billType && b.billType.chamber) ? cap(b.billType.chamber) : (/^[JR]/.test(b.basePrintNo) ? 'Senate' : 'Assembly');
+      var body = text.length > 160000 ? excerptBudget(text, 160000).text : text;
+      var header = ['BUDGET RESOLUTION: ' + b.basePrintNo + ' (' + house + ')', 'TITLE: ' + b.title, 'URL: ' + billUrl(b.basePrintNo, b.session),
+        'FULL TEXT: ' + text.length + ' characters' + (text.length > 160000 ? '; only the sections mentioning energy, climate, NYSERDA, DPS/PSC, NYPA/LIPA or related terms are kept below.' : '; full text below.'), ''].join('\n');
+      var f = DriveApp.getFolderById(CFG.WORK).createFile('budget_resolution_' + b.basePrintNo + '.txt', header + '\n' + (body || '(no text in the data feed yet)'), 'text/plain');
+      db.budget.res[id] = { seen: nyNow().day, fileId: f.getId(), house: house };
+      addEvent(db, { type: 'budget_resolution', house: house, bill: b.basePrintNo, title: b.title, fileId: f.getId(), url: billUrl(b.basePrintNo, b.session), chars: text.length, prevBrief: db.budget.briefs.length ? db.budget.briefs[0] : null });
+      log('budget: ' + house + ' one-house resolution ' + b.basePrintNo + ' queued (' + text.length + ' chars)');
+    });
+  }
+
   // ------------------------------------------------------------------ inbox
   function ingest(db) {
     var folder = DriveApp.getFolderById(CFG.INBOX);
@@ -826,7 +851,7 @@ globalThis.MyLA = (function () {
       Object.keys(db.bills).forEach(function (k) { if (db.bills[k].tr) arch[k] = db.bills[k]; });
       DriveApp.getFolderById(CFG.WORK).createFile('archive_' + db.session + '.json', JSON.stringify({ tracked: arch, activity: db.activity }), 'text/plain');
       log('session rollover ' + db.session + ' -> ' + session + '; archived ' + Object.keys(arch).length + ' tracked bills');
-      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.queue.refetch = [];
+      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = [];
       addEvent(db, { type: 'info', detail: 'New legislative session ' + session + '–' + (session + 1) + ' started. MyLA archived last session\'s tracked bills and is loading the new session.' });
     }
     db.session = session;
@@ -857,6 +882,7 @@ globalThis.MyLA = (function () {
         db.lastUpdateCheck = bf.fromTime;
         try { checkHearings(db, true); } catch (e) { log('hearings failed: ' + e); }
         try { checkBudget(db, n, bf.session, true); } catch (e) { log('budget seed failed: ' + e); }
+        try { checkBudgetResolutions(db, n, bf.session, true); } catch (e) { log('resolution seed failed: ' + e); }
         var count = Object.keys(db.bills).filter(function (k) { return db.bills[k].rel !== 'exclude'; }).length;
         addEvent(db, { type: 'setup_complete', session: bf.session, count: count, detail: 'MyLA loaded ' + count + ' energy and climate bills from the ' + bf.session + '–' + (bf.session + 1) + ' session.' });
       }
@@ -961,7 +987,10 @@ globalThis.MyLA = (function () {
         if (force || (slot && db.lastSlot !== slot)) {
           regularCheck(db, n);
           if (timeLeft() > 120000) { try { checkHearings(db, false); } catch (e) { log('hearings failed: ' + e); } }
-          if (inSessionWindow(n) || force) { try { checkBudget(db, n, db.session, false); } catch (e) { log('budget failed: ' + e); } }
+          if (inSessionWindow(n) || force) {
+            try { checkBudget(db, n, db.session, false); } catch (e) { log('budget failed: ' + e); }
+            try { checkBudgetResolutions(db, n, db.session, !db.budget.resSeeded); db.budget.resSeeded = true; } catch (e) { log('resolutions failed: ' + e); }
+          }
           db.lastSlot = slot || db.lastSlot;
           db.lastCheck = n.iso;
           did.push('check');
