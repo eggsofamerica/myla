@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-21.7',
+    VERSION: '2026-11-21.8',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -259,7 +259,16 @@ globalThis.MyLA = (function () {
       ap: b.approvalMessage && b.approvalMessage.chapter ? 1 : 0
     };
     if (!rec.rel) rec.rel = classify(rec);
+    if (rec.tr) rec.hist = buildHist(b); else delete rec.hist;
     return rec;
+  }
+  // Full action and vote history for tracked bills, newest first.
+  function buildHist(b) {
+    var h = [];
+    ((b.actions && b.actions.items) || []).forEach(function (a, i) { h.push({ d: a.date || '', t: a.text + (a.chamber ? ' (' + cap(a.chamber) + ')' : ''), o: i }); });
+    ((b.votes && b.votes.items) || []).forEach(function (v, i) { h.push({ d: v.voteDate || '', t: voteText(v), o: 1000 + i }); });
+    h.sort(function (x, y) { return String(y.d).localeCompare(String(x.d)) || y.o - x.o; });
+    return h.slice(0, 300).map(function (x) { return { d: x.d, t: x.t }; });
   }
   function voteText(v) {
     var mv = (v.memberVotes && v.memberVotes.items) || {};
@@ -401,6 +410,7 @@ globalThis.MyLA = (function () {
       r.tr = !!on;
       if (on && !was) addActivity(db, x, 'Tracking started');
     });
+    try { refreshBills(db, ids, {}); } catch (e) { log('history refresh failed: ' + e); }
     if (on && !b.sum && !b.sumQueued) queueSummary(db, id);
     log((on ? 'tracking ' : 'untracked ') + ids.join(' + ') + (viaSheet ? ' (from Sheet)' : ''));
   }
@@ -693,7 +703,15 @@ globalThis.MyLA = (function () {
 
   // ------------------------------------------------------------------ outputs
   function compact(b) {
-    return { id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? (b.ev || []).slice(0, 25) : undefined };
+    return { id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
+  }
+  function mergeHist(b) {
+    var hist = b.hist || [], seen = {};
+    hist.forEach(function (x) { seen[x.d + '|' + x.t] = 1; seen[x.t] = 1; });
+    var notes = (b.ev || []).filter(function (e) { return !seen[e.d + '|' + e.t] && !seen[e.t]; });
+    var all = hist.concat(notes);
+    all.sort(function (x, y) { return String(y.d).localeCompare(String(x.d)); });
+    return all.slice(0, 300);
   }
   function writeOutputs(db, n) {
     var session = db.session;
@@ -857,6 +875,7 @@ globalThis.MyLA = (function () {
     if (force) return true;
     var props = PropertiesService.getScriptProperties(), n = nyNow();
     if (props.getProperty('BUSY') === '1') return true;                       // backfill or queues pending
+    if (props.getProperty('CODE_VERSION') !== CFG.VERSION) return true;       // first run of new code
     var slot = slotFor(n);
     if (slot && props.getProperty('LAST_SLOT') !== slot) return true;          // scheduled check due
     if (DriveApp.getFolderById(CFG.INBOX).getFiles().hasNext()) return true;   // dashboard or Claude sent something
@@ -883,6 +902,8 @@ globalThis.MyLA = (function () {
     try {
       rollSession(db, n);
       if (ingest(db)) did.push('inbox');
+      var noHist = Object.keys(db.bills).filter(function (k) { return db.bills[k].tr && !db.bills[k].hist && db.queue.refetch.indexOf(k) < 0; });
+      if (noHist.length) { db.queue.refetch = db.queue.refetch.concat(noHist); did.push('history'); }
       try { if (syncSheetTracking(db)) did.push('sheet'); } catch (e) { log('sheet sync failed: ' + e); }
       if (db.backfill && db.backfill.stage !== 'done') {
         runBackfill(db, n); did.push('backfill');
@@ -904,6 +925,7 @@ globalThis.MyLA = (function () {
       props.setProperty('BUSY', (db.backfill && db.backfill.stage !== 'done') || db.queue.refetch.length || db.pendingNew.length ? '1' : '0');
       if (db.lastSlot) props.setProperty('LAST_SLOT', db.lastSlot);
       props.setProperty('SESSION', String(db.session));
+      props.setProperty('CODE_VERSION', CFG.VERSION);
       if (did.length) props.setProperty('SHEET_WRITTEN', String(Date.now()));
     } catch (e) {
       log('ERROR ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e));

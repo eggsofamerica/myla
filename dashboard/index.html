@@ -91,6 +91,11 @@ nav button:focus-visible, button:focus-visible, input:focus-visible { outline: 2
 .timeline li { display: grid; grid-template-columns: 84px 1fr; gap: 8px; }
 .timeline time { color: var(--muted); font-variant-numeric: tabular-nums; }
 details summary { cursor: pointer; font-size: 13px; color: var(--accent); font-weight: 500; }
+details.fold { border-top: 1px solid var(--line); padding-top: 8px; }
+details.fold > summary { font: 600 14px var(--display); letter-spacing: .02em; padding: 2px 0; }
+details.fold .summary { border-top: 0; padding-top: 6px; }
+details.fold .timeline { margin-top: 6px; }
+.btn.small { font-size: 12px; padding: 5px 10px; margin-top: 8px; }
 .empty { color: var(--muted); font-size: 14px; padding: 16px 4px; }
 .more { justify-self: center; }
 .h-date { font: 700 18px var(--display); min-width: 64px; }
@@ -132,6 +137,9 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   var CHECK_TASK = 'YOUR_SCHEDULED_TASK_ID';
   var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
   try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
+  state.ui = {};
+  try { state.ui = JSON.parse(localStorage.getItem('myla-ui') || '{}'); } catch (e) { state.ui = {}; }
+  function saveUi() { try { localStorage.setItem('myla-ui', JSON.stringify(state.ui)); } catch (e) {} }
   try { state.pending = JSON.parse(localStorage.getItem('myla-pending') || '{}'); } catch (e) { state.pending = {}; }
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -195,9 +203,25 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       if (!mcp) { setStatus('bad', 'This view can\'t reach Google Drive. Open MyLA on claude.ai.'); return; }
       // First read is a call, so the viewer can be asked for permission; then a watch keeps it fresh.
       mcp.callTool(SERVER, 'download_file_content', { fileId: DATA_FILE }, { cache: { staleTime: 2 * 60000, gcTime: 7 * 864e5 } })
-        .then(function (r) { var d = findData(r); if (d) accept(d); else fallbackRead(mcp); startWatch(mcp); })
+        .then(function (r) { var d = findData(r); if (d) accept(d); else fallbackRead(mcp); startWatch(mcp); loadInboxPending(mcp); })
         .catch(function (e) { onError(mcp, e); });
     });
+  }
+  // Track/Stop requests waiting in the Drive inbox (the collector picks them up within 5 minutes).
+  // Reading them from Drive keeps "Tracking…" visible on every device and after a reload.
+  function loadInboxPending(mcp) {
+    mcp.callTool(SERVER, 'search_files', { query: "parentId = '" + INBOX + "' and trashed = false", excludeContentSnippets: true, pageSize: 100 }, { cache: false })
+      .then(function (r) {
+        var p = r && r.payload, files = (p && p.files) || [];
+        files.forEach(function (f) {
+          var m = String(f.title || '').match(/^(track|untrack)__([A-Z]\d+-\d{4})__(\d+)\.json$/);
+          if (!m) return;
+          var at = Number(m[3]), cur = state.pending[m[2]];
+          if (!cur || cur.at <= at) state.pending[m[2]] = { on: m[1] === 'track', at: at };
+        });
+        savePending(); render();
+      })
+      .catch(function () {});
   }
   function startWatch(mcp) {
     mcp.watchTool(SERVER, 'download_file_content', { fileId: DATA_FILE }, function (ev) {
@@ -248,7 +272,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     if (!state.mcp) return;
     btn.disabled = true; btn.textContent = on ? 'Tracking…' : 'Removing…';
     var op = { op: on ? 'track' : 'untrack', id: id, at: new Date().toISOString() };
-    state.mcp.callTool(SERVER, 'create_file', { title: 'op-' + Date.now() + '.json', parentId: INBOX, contentMimeType: 'text/plain', textContent: JSON.stringify(op), disableConversionToGoogleType: true }, { cache: false })
+    state.mcp.callTool(SERVER, 'create_file', { title: op.op + '__' + id + '__' + Date.now() + '.json', parentId: INBOX, contentMimeType: 'text/plain', textContent: JSON.stringify(op), disableConversionToGoogleType: true }, { cache: false })
       .then(function () {
         var b = byId(id);
         var ids = [id].concat(b && b.sa ? b.sa.split(', ').filter(String) : []);
@@ -287,9 +311,15 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<div class="meta">' + esc(b.sp) + (b.co ? ' + ' + b.co + ' cosponsor' + (b.co > 1 ? 's' : '') : '') + (b.pg ? ' · Program bill: ' + esc(b.pg) : '') + (b.ls ? ' · ' + esc(b.ls) : '') + '</div>' +
       '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>';
     if (full) {
-      if (b.sum) h += '<div class="summary">' + md(b.sum) + '</div>';
-      else if (tr) h += '<div class="summary meta">' + (b.q ? 'Summary is being written; it appears after the next scheduled check.' : 'Summary will be written at the next scheduled check.') + '</div>';
-      if (b.ev && b.ev.length) h += '<details' + (daysAgo(b.ev[0].d) < 8 ? ' open' : '') + '><summary>Activity (' + b.ev.length + ')</summary><ul class="timeline">' + b.ev.slice(0, 15).map(function (e) { return '<li><time>' + esc(fmtDate(e.d)) + '</time><span>' + esc(e.t) + '</span></li>'; }).join('') + '</ul></details>';
+      var ui = state.ui[b.id] || {};
+      if (b.sum) h += '<details class="fold" data-fold="sum" data-id="' + esc(b.id) + '"' + (ui.sumClosed ? '' : ' open') + '><summary>Summary' + (b.sumAt ? ' <span class="meta">· ' + esc(fmtDate(b.sumAt)) + '</span>' : '') + '</summary><div class="summary">' + md(b.sum) + '</div></details>';
+      else if (tr) h += '<div class="summary meta">' + (b.q ? 'Summary is being written. Tap Run check now, or it appears after the next scheduled check.' : 'Summary will be written at the next check.') + '</div>';
+      if (b.ev && b.ev.length) {
+        var all = !!ui.allHist, shown = all ? b.ev : b.ev.slice(0, 8);
+        h += '<details class="fold" data-fold="act" data-id="' + esc(b.id) + '"' + (ui.actOpen === undefined ? (daysAgo(b.ev[0].d) < 8 ? ' open' : '') : (ui.actOpen ? ' open' : '')) + '><summary>Activity (' + b.ev.length + ')</summary><ul class="timeline">' +
+          shown.map(function (e) { return '<li><time>' + esc(fmtDate(e.d)) + '</time><span>' + esc(e.t) + '</span></li>'; }).join('') + '</ul>' +
+          (b.ev.length > 8 ? '<button class="btn ghost small" data-hist="' + esc(b.id) + '">' + (all ? 'Show recent only' : 'Show full history (' + b.ev.length + ')') + '</button>' : '') + '</details>';
+      }
     }
     return h + '</article>';
   }
@@ -389,7 +419,16 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var f = e.target.closest('[data-filter]'); if (f) { state.filter = f.dataset.filter; state.shown = 60; render(); return; }
     if (e.target.id === 'more') { state.shown += 60; render(); }
     if (e.target.id === 'runcheck') { runCheck(e.target); }
+    var hb = e.target.closest('[data-hist]');
+    if (hb) { var u = state.ui[hb.dataset.hist] = state.ui[hb.dataset.hist] || {}; u.allHist = !u.allHist; u.actOpen = true; saveUi(); render(); }
   });
+  // Remember which summaries and activity lists are open or closed (toggle doesn't bubble, so capture it).
+  $('view').addEventListener('toggle', function (e) {
+    var d = e.target; if (!d.dataset || !d.dataset.fold) return;
+    var u = state.ui[d.dataset.id] = state.ui[d.dataset.id] || {};
+    if (d.dataset.fold === 'sum') u.sumClosed = !d.open; else u.actOpen = d.open;
+    saveUi();
+  }, true);
   $('view').addEventListener('input', function (e) { if (e.target.id === 'q') { state.q = e.target.value; state.shown = 60; render(); } });
   function fromHash() { var h = (location.hash || '').slice(1); if (['tracked', 'bills', 'hearings', 'budget', 'activity'].indexOf(h) >= 0) state.tab = h; }
   window.addEventListener('hashchange', function () { fromHash(); render(); });
