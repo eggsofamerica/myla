@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-21.9',
+    VERSION: '2026-11-21.10',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -874,7 +874,8 @@ globalThis.MyLA = (function () {
       if (!j.offsetEnd || j.offsetEnd >= total) break;
       offset = j.offsetEnd + 1;
     }
-    var known = Object.keys(changed).filter(function (id) { return db.bills[id]; });
+    // Only tracked bills are kept current; untracked bills stay as first loaded (static fields only).
+    var known = Object.keys(changed).filter(function (id) { return db.bills[id] && db.bills[id].tr; });
     db.queue.refetch = db.queue.refetch.concat(known.filter(function (id) { return db.queue.refetch.indexOf(id) < 0; }));
     db.lastUpdateCheck = n.iso;
     // 2. New bills since last check
@@ -884,9 +885,10 @@ globalThis.MyLA = (function () {
       .filter(function (id) { return !db.bills[id] && !(db.excluded || {})[id]; });
     db.pendingNew = db.pendingNew.concat(fresh.filter(function (id) { return db.pendingNew.indexOf(id) < 0; }));
     db.lastNewCheck = n.iso;
-    log('check: ' + Object.keys(changed).length + ' bills changed statewide (' + known.length + ' of ours), ' + fresh.length + ' new candidates');
+    log('check: ' + Object.keys(changed).length + ' bills changed statewide (' + known.length + ' tracked), ' + fresh.length + ' new candidates');
   }
   function drainQueues(db) {
+    db.queue.refetch = db.queue.refetch.filter(function (id) { return db.bills[id] && db.bills[id].tr; });
     if (db.queue.refetch.length) db.queue.refetch = refreshBills(db, db.queue.refetch, {});
     if (db.pendingNew.length && timeLeft() > 40000) {
       var added = [];

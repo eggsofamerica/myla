@@ -125,7 +125,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   <div class="strip" id="strip">
     <div class="tile"><b id="t-tracked">–</b><span>Tracked</span></div>
     <div class="tile"><b id="t-bills">–</b><span>Energy &amp; climate bills</span></div>
-    <div class="tile"><b id="t-week">–</b><span>Moved in last 7 days</span></div>
+    <div class="tile"><b id="t-week">–</b><span>Tracked bills moved this week</span></div>
     <div class="tile"><b id="t-hear">–</b><span>Hearings to watch</span></div>
   </div>
   <nav role="tablist" id="tabs">
@@ -148,6 +148,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
   try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
   state.ui = {};
+  state.af = { tp: '', ch: '', sa: '', rel: '', nys: false, recent: false };
   state.tf = { cm: '', tp: '', pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
   try { state.ui = JSON.parse(localStorage.getItem('myla-ui') || '{}'); } catch (e) { state.ui = {}; }
   function saveUi() { try { localStorage.setItem('myla-ui', JSON.stringify(state.ui)); } catch (e) {} }
@@ -378,7 +379,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<button class="btn' + (tr ? ' ghost' : '') + '" data-track="' + esc(b.id) + '" data-on="' + (tr ? '0' : '1') + '">' + (pend ? 'Undo' : (tr ? 'Stop tracking' : 'Track')) + '</button></div>' +
       '<div class="title">' + esc(b.t) + '</div>' +
       '<div class="meta">' + esc(b.sp) + (b.pt ? ' <span class="party p' + esc(b.pt.charAt(0)) + '">' + esc(b.pt) + '</span>' : '') + (b.co ? ' + ' + b.co + ' cosponsor' + (b.co > 1 ? 's' : '') : '') + (b.pg ? ' · Program bill: ' + esc(b.pg) : '') + (b.ls ? ' · ' + esc(b.ls) : '') + '</div>' +
-      '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>' +
+      (tr ? '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>' : '<div class="meta">Introduced ' + esc(fmtDate(b.pub)) + '</div>') +
       (full && committeeOf(b) ? '<div class="meta">Committee: ' + esc(committeeOf(b)) + (b.cm ? '' : ' (last)') + '</div>' : '') +
       ((b.tp || []).length ? '<div class="tags">' + b.tp.map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '');
     if (full) {
@@ -426,20 +427,36 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     return '<div class="list">' + runBar(d) + filterBar(list, shown.length) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>';
   }
   function viewBills(d) {
-    var q = state.q.toLowerCase();
+    var q = state.q.toLowerCase(), f = state.af;
     var list = d.bills.filter(function (b) {
-      if (state.filter === 'week' && daysAgo(b.ld) > 7) return false;
-      if (state.filter === 'new' && daysAgo(b.pub) > 14) return false;
-      if (state.filter === 'core' && b.rel !== 'core') return false;
-      if (state.filter === 'broad' && b.rel !== 'broad') return false;
+      if (f.tp && (b.tp || []).indexOf(f.tp) < 0) return false;
+      if (f.ch && chamberOf(b) !== f.ch) return false;
+      if (f.sa === 'yes' && !b.sa) return false;
+      if (f.sa === 'no' && b.sa) return false;
+      if (f.rel && b.rel !== f.rel) return false;
+      if (f.nys && (b.tp || []).indexOf('NYSERDA') < 0) return false;
+      if (f.recent && daysAgo(b.pub) > 14) return false;
       if (q && (b.p + ' ' + b.id + ' ' + b.sa + ' ' + b.t + ' ' + b.sp + ' ' + b.ls).toLowerCase().indexOf(q) < 0) return false;
       return true;
     });
+    list.sort(function (x, y) { return String(y.pub).localeCompare(String(x.pub)); });
     list = pairs(list);
-    var chips = [['all', 'All'], ['week', 'Moved this week'], ['new', 'Introduced in last 2 weeks'], ['core', 'Core energy'], ['broad', 'Broader matches']];
-    var h = '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
-      '<div class="tools">' + chips.map(function (c) { return '<button class="chip" data-filter="' + c[0] + '" aria-pressed="' + (state.filter === c[0]) + '">' + c[1] + '</button>'; }).join('') + '</div>' +
-      '<p class="meta">' + list.length + ' bills' + (list.length !== d.bills.length ? ' shown (Senate–Assembly pairs combined)' : '') + ', most recent action first.</p>';
+    var topics = [];
+    d.bills.forEach(function (b) { (b.tp || []).forEach(function (t) { topics.push(t); }); });
+    var nActive = Object.keys(f).filter(function (k) { return f[k]; }).length;
+    var h = '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor, law" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
+      '<details class="card filters" id="afbox"' + (state.afOpen || nActive ? ' open' : '') + '><summary>Filters' + (nActive ? ' (' + nActive + ' on)' : '') + ' <span class="meta">· ' + list.length + ' bills</span></summary>' +
+      '<div class="fgrid">' +
+      '<label>Topic<select data-af="tp">' + opts(topics, f.tp, 'All topics') + '</select></label>' +
+      '<label>Chamber<select data-af="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
+      '<label>Same-as<select data-af="sa"><option value="">Either</option><option value="yes"' + (f.sa === 'yes' ? ' selected' : '') + '>Has same-as</option><option value="no"' + (f.sa === 'no' ? ' selected' : '') + '>No same-as</option></select></label>' +
+      '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option></select></label>' +
+      '</div><div class="tools">' +
+      '<button class="chip" data-aft="nys" aria-pressed="' + !!f.nys + '">Mentions NYSERDA</button>' +
+      '<button class="chip" data-aft="recent" aria-pressed="' + !!f.recent + '">Introduced in last 2 weeks</button>' +
+      '<span class="spacer"></span>' + (nActive ? '<button class="btn ghost small" id="afclear">Clear filters</button>' : '') +
+      '</div></details>' +
+      '<p class="meta">Newest first. Untracked bills show what they looked like when MyLA loaded them; track a bill to follow its progress.</p>';
     if (!list.length) return h + '<p class="empty">No bills match.</p>';
     h += '<div class="list">' + list.slice(0, state.shown).map(function (b) { return billCard(b, false); }).join('') + '</div>';
     if (list.length > state.shown) h += '<button class="btn ghost more" id="more">Show more (' + (list.length - state.shown) + ' left)</button>';
@@ -476,7 +493,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var tracked = pairs(d.bills.filter(isTracked)).length;
     $('t-tracked').textContent = tracked;
     $('t-bills').textContent = pairs(d.bills).length;
-    $('t-week').textContent = pairs(d.bills.filter(function (b) { return daysAgo(b.ld) <= 7; })).length;
+    $('t-week').textContent = pairs(d.bills.filter(function (b) { return isTracked(b) && daysAgo(b.ld) <= 7; })).length;
     $('t-hear').textContent = (d.hearings || []).filter(function (x) { return x.rel === true; }).length;
     $('tab-tracked').textContent = 'Tracked (' + tracked + ')';
     var fn = { tracked: viewTracked, bills: viewBills, hearings: viewHearings, budget: viewBudget, activity: viewActivity }[state.tab];
@@ -491,6 +508,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var f = e.target.closest('[data-filter]'); if (f) { state.filter = f.dataset.filter; state.shown = 60; render(); return; }
     if (e.target.id === 'more') { state.shown += 60; render(); }
     if (e.target.id === 'runcheck') { runCheck(e.target); }
+    var at = e.target.closest('[data-aft]'); if (at) { state.af[at.dataset.aft] = !state.af[at.dataset.aft]; state.shown = 60; render(); }
+    if (e.target.id === 'afclear') { Object.keys(state.af).forEach(function (k) { state.af[k] = typeof state.af[k] === 'boolean' ? false : ''; }); render(); }
     var tt = e.target.closest('[data-tft]'); if (tt) { state.tf[tt.dataset.tft] = !state.tf[tt.dataset.tft]; render(); }
     if (e.target.id === 'tfclear') { Object.keys(state.tf).forEach(function (k) { state.tf[k] = typeof state.tf[k] === 'boolean' ? false : ''; }); render(); }
     var hb = e.target.closest('[data-hist]');
@@ -499,12 +518,17 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   // Remember which summaries and activity lists are open or closed (toggle doesn't bubble, so capture it).
   $('view').addEventListener('toggle', function (e) {
     var d = e.target; if (d.id === 'tfbox') { state.filtersOpen = d.open; return; }
+    if (d.id === 'afbox') { state.afOpen = d.open; return; }
     if (!d.dataset || !d.dataset.fold) return;
     var u = state.ui[d.dataset.id] = state.ui[d.dataset.id] || {};
     if (d.dataset.fold === 'sum') u.sumClosed = !d.open; else u.actOpen = d.open;
     saveUi();
   }, true);
-  $('view').addEventListener('change', function (e) { var k = e.target.dataset && e.target.dataset.tf; if (k) { state.tf[k] = e.target.value; render(); } });
+  $('view').addEventListener('change', function (e) {
+    var ds = e.target.dataset || {};
+    if (ds.tf) { state.tf[ds.tf] = e.target.value; render(); }
+    if (ds.af) { state.af[ds.af] = e.target.value; state.shown = 60; render(); }
+  });
   $('view').addEventListener('input', function (e) { if (e.target.id === 'q') { state.q = e.target.value; state.shown = 60; render(); } });
   function fromHash() { var h = (location.hash || '').slice(1); if (['tracked', 'bills', 'hearings', 'budget', 'activity'].indexOf(h) >= 0) state.tab = h; }
   window.addEventListener('hashchange', function () { fromHash(); render(); });
