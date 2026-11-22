@@ -101,6 +101,14 @@ details.fold .timeline { margin-top: 6px; }
 .fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .fgrid label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); font-weight: 500; }
 .fgrid select { font: 14px var(--body); padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); min-width: 0; }
+.tgroup { display: grid; gap: 6px; margin-top: 10px; }
+.flabel { font-size: 12px; color: var(--muted); font-weight: 500; }
+.chip .cnt { opacity: .6; font-size: 11px; margin-left: 2px; }
+.exportbar { gap: 8px; }
+.exportbar .row { gap: 6px; }
+.selbox { width: 24px; height: 24px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--card); color: var(--card); font: 700 14px/1 var(--body); cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
+.selbox[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+.card.selected { box-shadow: 0 0 0 2px var(--accent-soft); }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
 .party { font: 600 11px var(--body); padding: 1px 6px; border-radius: 4px; background: var(--paper); border: 1px solid var(--line); }
@@ -144,12 +152,26 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   var SHEET_URL = 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit';
   var SERVER = 'Google Drive';
   var RUNNER = 'Claude Code Remote';
+  var EXPORTS = 'YOUR_EXPORTS_FOLDER_ID';
   var CHECK_TASK = 'YOUR_SCHEDULED_TASK_ID';
   var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
   try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
   state.ui = {};
-  state.af = { tp: '', ch: '', sa: '', rel: '', nys: false, recent: false };
-  state.tf = { cm: '', tp: '', pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
+  state.af = { tps: [], ch: '', sa: '', rel: '', nys: false, recent: false };
+  state.tf = { cm: '', tps: [], pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
+  state.sel = {}; state.exportMsg = '';
+  function isOn(v) { return Array.isArray(v) ? v.length > 0 : !!v; }
+  function clearF(f) { Object.keys(f).forEach(function (k) { f[k] = Array.isArray(f[k]) ? [] : (typeof f[k] === 'boolean' ? false : ''); }); }
+  function hasAll(b, tps) { return tps.every(function (t) { return (b.tp || []).indexOf(t) >= 0; }); }
+  function topicChips(pool, chosen, attr) {
+    var counts = {};
+    pool.forEach(function (b) { (b.tp || []).forEach(function (t) { counts[t] = (counts[t] || 0) + 1; }); });
+    var names = Object.keys(counts).sort();
+    chosen.forEach(function (t) { if (names.indexOf(t) < 0) names.push(t); });
+    if (!names.length) return '';
+    return '<div class="tgroup"><span class="flabel">Topics <span class="meta">(bills must match every topic you pick)</span></span><div class="tools">' +
+      names.map(function (t) { return '<button class="chip" ' + attr + '="' + esc(t) + '" aria-pressed="' + (chosen.indexOf(t) >= 0) + '">' + esc(t) + ' <span class="cnt">' + (counts[t] || 0) + '</span></button>'; }).join('') + '</div></div>';
+  }
   try { state.ui = JSON.parse(localStorage.getItem('myla-ui') || '{}'); } catch (e) { state.ui = {}; }
   function saveUi() { try { localStorage.setItem('myla-ui', JSON.stringify(state.ui)); } catch (e) {} }
   try { state.pending = JSON.parse(localStorage.getItem('myla-pending') || '{}'); } catch (e) { state.pending = {}; }
@@ -330,7 +352,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var f = state.tf;
     return list.filter(function (b) {
       if (f.cm && committeeOf(b) !== f.cm) return false;
-      if (f.tp && (b.tp || []).indexOf(f.tp) < 0) return false;
+      if (f.tps.length && !hasAll(b, f.tps)) return false;
       if (f.pt && (partyOf(b) || 'Unknown') !== f.pt) return false;
       if (f.st && stageOf(b) !== f.st) return false;
       if (f.ch && chamberOf(b) !== f.ch) return false;
@@ -347,21 +369,76 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     Object.keys(seen).sort().forEach(function (v) { out.push('<option value="' + esc(v) + '"' + (v === current ? ' selected' : '') + '>' + esc(v) + '</option>'); });
     return out.join('');
   }
+  function toggleIn(arr, v) { var i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
+  function exportBar(all) {
+    var n = all.filter(function (b) { return state.sel[b.id]; }).length;
+    return '<div class="card exportbar"><div class="row"><span class="meta" style="flex:1;min-width:150px">' + (n ? n + ' selected for export' : 'Tick bills to export them, or select all shown.') + '</span>' +
+      '<button class="btn ghost small" id="selall">Select all shown</button>' + (n ? '<button class="btn ghost small" id="selnone">Clear</button>' : '') + '</div>' +
+      (n ? '<div class="row"><button class="btn small" data-export="doc">Export to Google Doc</button><button class="btn small" data-export="sheet">Export to Google Sheet</button><button class="btn ghost small" data-export="copy">Copy as text</button></div>' : '') +
+      (state.exportMsg ? '<div class="meta">' + state.exportMsg + '</div>' : '') + '</div>';
+  }
+  function selectedBills() { return pairs(state.data.bills.filter(isTracked)).filter(function (b) { return state.sel[b.id]; }); }
+  function exportMarkdown(list) {
+    var day = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    return '# MyLA tracked bills, ' + day + '\n\n' + list.map(function (b) {
+      var sa = (b.sa || '').split(', ').filter(String).map(function (x) { return x.split('-')[0]; }).join(', ');
+      var lines = ['## ' + b.p + ': ' + b.t, '',
+        '- **Sponsor:** ' + b.sp + (b.pt ? ' (' + b.pt + ')' : '') + (b.co ? ', ' + b.co + ' cosponsors' : ''),
+        '- **Same as:** ' + (sa || 'none'),
+        '- **Committee:** ' + (committeeOf(b) || 'n/a'),
+        '- **Status:** ' + (b.st || '') + (b.ld ? ' (last action ' + fmtDate(b.ld) + ': ' + (b.la || '').toLowerCase() + ')' : ''),
+        '- **Topics:** ' + ((b.tp || []).join(', ') || 'n/a'),
+        '- **Link:** ' + b.u, ''];
+      if (b.sum) lines.push(b.sum.trim(), '');
+      if (b.ev && b.ev.length) { lines.push('**Recent activity**', ''); b.ev.slice(0, 5).forEach(function (e) { lines.push('- ' + fmtDate(e.d) + ': ' + e.t); }); lines.push(''); }
+      return lines.join('\n');
+    }).join('\n');
+  }
+  function csvCell(v) { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function exportCsv(list) {
+    var head = ['Bill', 'Same as', 'Title', 'Sponsor', 'Party', 'Committee', 'Stage', 'Status', 'Last action date', 'Last action', 'Topics', 'NYSERDA role', 'Link', 'Summary'];
+    var rows = list.map(function (b) { return [b.p, (b.sa || '').replace(/-\d{4}/g, ''), b.t, b.sp, b.pt, committeeOf(b), stageOf(b), b.st, b.ld, b.la, (b.tp || []).join('; '), nysRole(b) ? 'Yes' : 'No', b.u, b.sum]; });
+    return [head].concat(rows).map(function (r) { return r.map(csvCell).join(','); }).join('\n');
+  }
+  function doExport(kind, btn) {
+    var list = selectedBills();
+    if (!list.length) return;
+    if (kind === 'copy') {
+      var txt = exportMarkdown(list);
+      try { navigator.clipboard.writeText(txt).then(function () { state.exportMsg = 'Copied ' + list.length + ' bill' + (list.length > 1 ? 's' : '') + ' to the clipboard.'; render(); }, function () { state.exportMsg = 'Your browser blocked copying. Use Export to Google Doc instead.'; render(); }); }
+      catch (e) { state.exportMsg = 'Your browser blocked copying. Use Export to Google Doc instead.'; render(); }
+      return;
+    }
+    if (!state.mcp) return;
+    btn.disabled = true; btn.textContent = 'Creating…';
+    var stamp = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    var title = 'MyLA export: ' + list.length + ' bill' + (list.length > 1 ? 's' : '') + ' (' + stamp + ')';
+    var input = kind === 'doc' ? { title: title, parentId: EXPORTS, contentMimeType: 'text/markdown', textContent: exportMarkdown(list) }
+                               : { title: title, parentId: EXPORTS, contentMimeType: 'text/csv', textContent: exportCsv(list) };
+    state.mcp.callTool(SERVER, 'create_file', input, { cache: false }).then(function (r) {
+      var p = r && r.payload, url = p && (p.viewUrl || p.url);
+      state.exportMsg = 'Created <a href="' + esc(url || 'https://drive.google.com/drive/folders/' + EXPORTS) + '">' + esc(title) + '</a> in MyLA › Exports.';
+      render();
+    }).catch(function (e) {
+      var code = e && e.code;
+      state.exportMsg = (code === 'server_unavailable' || code === 'upstream_error') ? 'Not sure the file was created. Check MyLA › Exports in Drive before trying again.' : 'Couldn\'t create the file' + (e && e.message ? ': ' + esc(String(e.message).slice(0, 120)) : '.');
+      render();
+    });
+  }
   function filterBar(all, shownCount) {
     var f = state.tf, topics = [];
     all.forEach(function (b) { (b.tp || []).forEach(function (t) { topics.push(t); }); });
     var stagesPresent = STAGES.filter(function (st) { return all.some(function (b) { return stageOf(b) === st; }); });
-    var nActive = Object.keys(f).filter(function (k) { return f[k]; }).length, active = nActive > 0;
+    var nActive = Object.keys(f).filter(function (k) { return isOn(f[k]); }).length, active = nActive > 0;
     if (state.filtersOpen === undefined) state.filtersOpen = false;
     return '<details class="card filters" id="tfbox"' + (state.filtersOpen || active ? ' open' : '') + '><summary>Filters' + (active ? ' (' + nActive + ' on)' : '') + ' <span class="meta">· showing ' + shownCount + ' of ' + all.length + '</span></summary>' +
       '<div class="fgrid">' +
       '<label>Committee<select data-tf="cm">' + opts(all.map(committeeOf), f.cm, 'All committees') + '</select></label>' +
-      '<label>Topic<select data-tf="tp">' + opts(topics, f.tp, 'All topics') + '</select></label>' +
       '<label>Sponsor party<select data-tf="pt">' + opts(all.map(function (b) { return partyOf(b) || 'Unknown'; }), f.pt, 'Any party') + '</select></label>' +
       '<label>Stage<select data-tf="st"><option value="">Any stage</option>' + stagesPresent.map(function (x) { return '<option' + (x === f.st ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' +
       '<label>Chamber<select data-tf="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
       '<label>Same-as<select data-tf="sa"><option value="">Either</option><option value="yes"' + (f.sa === 'yes' ? ' selected' : '') + '>Has same-as</option><option value="no"' + (f.sa === 'no' ? ' selected' : '') + '>No same-as</option></select></label>' +
-      '</div><div class="tools">' +
+      '</div>' + topicChips(trackedFiltered(all), f.tps, 'data-ttp') + '<div class="tools">' +
       '<button class="chip" data-tft="nys" aria-pressed="' + f.nys + '">NYSERDA has a role</button>' +
       '<button class="chip" data-tft="recent" aria-pressed="' + f.recent + '">Moved in last 30 days</button>' +
       '<span class="spacer"></span>' +
@@ -373,8 +450,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var sa = (b.sa || '').split(', ').filter(String);
     var saHtml = sa.length ? '<span class="same">same as ' + sa.map(function (s) { var o = byId(s); var p = s.split('-'); return '<a class="num" href="' + (o ? o.u : 'https://www.nysenate.gov/legislation/bills/' + p[1] + '/' + p[0]) + '">' + esc(p[0]) + '</a>'; }).join(', ') + '</span>' : '<span class="same">no same-as</span>';
     var isNew = daysAgo(b.pub) <= 7;
-    var h = '<article class="card' + (tr ? ' tracked' : '') + '">' +
-      '<div class="row"><a class="num" href="' + esc(b.u) + '">' + esc(b.p || num(b.id)) + '</a>' + saHtml + (isNew ? '<span class="pill new">New</span>' : '') + '<span class="spacer"></span>' +
+    var h = '<article class="card' + (tr ? ' tracked' : '') + (state.sel[b.id] && full ? ' selected' : '') + '">' +
+      '<div class="row">' + (full ? '<button class="selbox" data-sel="' + esc(b.id) + '" aria-pressed="' + !!state.sel[b.id] + '" aria-label="Select ' + esc(b.p) + ' for export">' + (state.sel[b.id] ? '✓' : '') + '</button>' : '') + '<a class="num" href="' + esc(b.u) + '">' + esc(b.p || num(b.id)) + '</a>' + saHtml + (isNew ? '<span class="pill new">New</span>' : '') + '<span class="spacer"></span>' +
       (pend ? '<span class="meta">' + (pend.on ? 'Tracking…' : 'Removing…') + '</span>' : '') +
       '<button class="btn' + (tr ? ' ghost' : '') + '" data-track="' + esc(b.id) + '" data-on="' + (tr ? '0' : '1') + '">' + (pend ? 'Undo' : (tr ? 'Stop tracking' : 'Track')) + '</button></div>' +
       '<div class="title">' + esc(b.t) + '</div>' +
@@ -424,12 +501,12 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var list = pairs(d.bills.filter(isTracked));
     if (!list.length && !Object.keys(state.pending).length) return '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
     var shown = trackedFiltered(list);
-    return '<div class="list">' + runBar(d) + filterBar(list, shown.length) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>';
+    return '<div class="list">' + runBar(d) + filterBar(list, shown.length) + exportBar(list) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>';
   }
   function viewBills(d) {
     var q = state.q.toLowerCase(), f = state.af;
     var list = d.bills.filter(function (b) {
-      if (f.tp && (b.tp || []).indexOf(f.tp) < 0) return false;
+      if (f.tps.length && !hasAll(b, f.tps)) return false;
       if (f.ch && chamberOf(b) !== f.ch) return false;
       if (f.sa === 'yes' && !b.sa) return false;
       if (f.sa === 'no' && b.sa) return false;
@@ -443,15 +520,14 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     list = pairs(list);
     var topics = [];
     d.bills.forEach(function (b) { (b.tp || []).forEach(function (t) { topics.push(t); }); });
-    var nActive = Object.keys(f).filter(function (k) { return f[k]; }).length;
+    var nActive = Object.keys(f).filter(function (k) { return isOn(f[k]); }).length;
     var h = '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor, law" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
       '<details class="card filters" id="afbox"' + (state.afOpen || nActive ? ' open' : '') + '><summary>Filters' + (nActive ? ' (' + nActive + ' on)' : '') + ' <span class="meta">· ' + list.length + ' bills</span></summary>' +
       '<div class="fgrid">' +
-      '<label>Topic<select data-af="tp">' + opts(topics, f.tp, 'All topics') + '</select></label>' +
       '<label>Chamber<select data-af="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
       '<label>Same-as<select data-af="sa"><option value="">Either</option><option value="yes"' + (f.sa === 'yes' ? ' selected' : '') + '>Has same-as</option><option value="no"' + (f.sa === 'no' ? ' selected' : '') + '>No same-as</option></select></label>' +
       '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option></select></label>' +
-      '</div><div class="tools">' +
+      '</div>' + topicChips(list, f.tps, 'data-atp') + '<div class="tools">' +
       '<button class="chip" data-aft="nys" aria-pressed="' + !!f.nys + '">Mentions NYSERDA</button>' +
       '<button class="chip" data-aft="recent" aria-pressed="' + !!f.recent + '">Introduced in last 2 weeks</button>' +
       '<span class="spacer"></span>' + (nActive ? '<button class="btn ghost small" id="afclear">Clear filters</button>' : '') +
@@ -509,9 +585,15 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     if (e.target.id === 'more') { state.shown += 60; render(); }
     if (e.target.id === 'runcheck') { runCheck(e.target); }
     var at = e.target.closest('[data-aft]'); if (at) { state.af[at.dataset.aft] = !state.af[at.dataset.aft]; state.shown = 60; render(); }
-    if (e.target.id === 'afclear') { Object.keys(state.af).forEach(function (k) { state.af[k] = typeof state.af[k] === 'boolean' ? false : ''; }); render(); }
+    if (e.target.id === 'afclear') { clearF(state.af); render(); }
+    var ap = e.target.closest('[data-atp]'); if (ap) { toggleIn(state.af.tps, ap.dataset.atp); state.shown = 60; render(); }
+    var tp = e.target.closest('[data-ttp]'); if (tp) { toggleIn(state.tf.tps, tp.dataset.ttp); render(); }
+    var sb = e.target.closest('[data-sel]'); if (sb) { if (state.sel[sb.dataset.sel]) delete state.sel[sb.dataset.sel]; else state.sel[sb.dataset.sel] = 1; render(); }
+    if (e.target.id === 'selall') { trackedFiltered(pairs(state.data.bills.filter(isTracked))).forEach(function (b) { state.sel[b.id] = 1; }); render(); }
+    if (e.target.id === 'selnone') { state.sel = {}; state.exportMsg = ''; render(); }
+    var ex = e.target.closest('[data-export]'); if (ex) { doExport(ex.dataset.export, ex); }
     var tt = e.target.closest('[data-tft]'); if (tt) { state.tf[tt.dataset.tft] = !state.tf[tt.dataset.tft]; render(); }
-    if (e.target.id === 'tfclear') { Object.keys(state.tf).forEach(function (k) { state.tf[k] = typeof state.tf[k] === 'boolean' ? false : ''; }); render(); }
+    if (e.target.id === 'tfclear') { clearF(state.tf); render(); }
     var hb = e.target.closest('[data-hist]');
     if (hb) { var u = state.ui[hb.dataset.hist] = state.ui[hb.dataset.hist] || {}; u.allHist = !u.allHist; u.actOpen = true; saveUi(); render(); }
   });
