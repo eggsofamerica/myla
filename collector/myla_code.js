@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-21.10',
+    VERSION: '2026-11-21.11',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -773,11 +773,12 @@ globalThis.MyLA = (function () {
     }
     return sh;
   }
-  var BILL_HEADER = ['Track', 'Bill', 'Same as', 'Title', 'Sponsor', 'Status', 'Last action date', 'Last action', 'Law section', 'Relevance', 'Link', 'Summary'];
+  var BILL_HEADER = ['Track', 'Bill', 'Same as', 'Title', 'Sponsor', 'Introduced', 'Status (tracked only)', 'Last action date (tracked only)', 'Last action (tracked only)', 'Law section', 'Relevance', 'Link', 'Summary'];
   function writeSheet(db, bills, hearings) {
     var ss = SpreadsheetApp.openById(CFG.SHEET);
     var sh = ensureSheet(ss, 'Bills', BILL_HEADER);
-    var rows = bills.map(function (b) { return [!!b.tr, b.id, b.sa, b.t, b.sp, b.st, b.ld, b.la, b.ls, b.rel, b.u, (b.sum || '').slice(0, 45000)]; });
+    // Status columns only for tracked bills: untracked bills aren't kept current, so their status would go stale.
+    var rows = bills.map(function (b) { return [!!b.tr, b.id, b.sa, b.t, b.sp, b.pub, b.tr ? b.st : '', b.tr ? b.ld : '', b.tr ? b.la : '', b.ls, b.rel, b.u, (b.sum || '').slice(0, 45000)]; });
     var last = sh.getLastRow();
     if (last > 1) sh.getRange(2, 1, last - 1, BILL_HEADER.length).clearContent();
     if (rows.length) {
