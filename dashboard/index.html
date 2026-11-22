@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyLA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Layout: a docket. Summary strip, then tabbed lists of bill cards, one column on phones. */
+  --paper: #f3f4f1;
+  --card: #ffffff;
+  --ink: #17201e;
+  --muted: #5d6763;
+  --line: #d8dcd6;
+  --accent: #1d5a8e;
+  --accent-soft: #e3edf6;
+  --good: #1e7a4c; --good-soft: #e1f2e8;
+  --warn: #946200; --warn-soft: #f8eed6;
+  --bad: #b3261e; --bad-soft: #f8e3e1;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #121716; --card: #1a2120; --ink: #e6ebe8; --muted: #9aa5a0; --line: #2d3734;
+    --accent: #7fb2e0; --accent-soft: #1d2c3a;
+    --good: #6cc797; --good-soft: #17302a; --warn: #e0b25a; --warn-soft: #33291a; --bad: #f08a80; --bad-soft: #3a1f1d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #121716; --card: #1a2120; --ink: #e6ebe8; --muted: #9aa5a0; --line: #2d3734;
+  --accent: #7fb2e0; --accent-soft: #1d2c3a;
+  --good: #6cc797; --good-soft: #17302a; --warn: #e0b25a; --warn-soft: #33291a; --bad: #f08a80; --bad-soft: #3a1f1d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.45 var(--body); -webkit-text-size-adjust: 100%; }
+a { color: var(--accent); }
+.wrap { max-width: 860px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 14px; }
+header { display: grid; gap: 6px; }
+.brand { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+h1 { font: 700 28px/1 var(--display); letter-spacing: .01em; margin: 0; }
+.session { font: 600 14px var(--display); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.status { font-size: 13px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); display: inline-block; }
+.dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.banner { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+.banner.bad { border-color: var(--bad); background: var(--bad-soft); }
+.banner.warn { border-color: var(--warn); background: var(--warn-soft); }
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.tile b { display: block; font: 700 24px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.tile span { font-size: 12px; color: var(--muted); }
+nav { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+nav button { font: 600 15px var(--display); letter-spacing: .02em; background: none; border: 0; color: var(--muted); padding: 10px 10px 9px; border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap; }
+nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+nav button:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tools input { flex: 1 1 220px; font: 15px var(--body); padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+.chip { font: 500 13px var(--body); border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 11px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.list { display: grid; gap: 10px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; }
+.card.tracked { border-left: 4px solid var(--accent); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.num { font: 500 14px var(--mono); text-decoration: none; }
+.same { font-size: 13px; color: var(--muted); }
+.title { font-weight: 500; text-wrap: pretty; }
+.meta { font-size: 13px; color: var(--muted); }
+.pill { font: 600 11px var(--body); text-transform: uppercase; letter-spacing: .05em; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.pill.comm { background: var(--paper); color: var(--muted); border: 1px solid var(--line); }
+.pill.pass { background: var(--good-soft); color: var(--good); }
+.pill.gov { background: var(--warn-soft); color: var(--warn); }
+.pill.law { background: var(--good); color: var(--card); }
+.pill.veto { background: var(--bad-soft); color: var(--bad); }
+.pill.new { background: var(--warn); color: var(--card); }
+.spacer { flex: 1; }
+.btn { font: 600 13px var(--body); border-radius: 8px; padding: 7px 12px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: var(--card); }
+.btn.ghost { background: transparent; color: var(--accent); }
+.btn[disabled] { opacity: .55; cursor: default; }
+.summary { border-top: 1px solid var(--line); padding-top: 8px; font-size: 14px; max-width: 68ch; }
+.summary p { margin: 0 0 6px; } .summary ul { margin: 0 0 6px; padding-left: 18px; }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.timeline li { display: grid; grid-template-columns: 84px 1fr; gap: 8px; }
+.timeline time { color: var(--muted); font-variant-numeric: tabular-nums; }
+details summary { cursor: pointer; font-size: 13px; color: var(--accent); font-weight: 500; }
+.empty { color: var(--muted); font-size: 14px; padding: 16px 4px; }
+.more { justify-self: center; }
+.h-date { font: 700 18px var(--display); min-width: 64px; }
+.hl { display: grid; gap: 4px; }
+pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; color: var(--muted); }
+@media (max-width: 520px) { .strip { grid-template-columns: repeat(2, 1fr); } h1 { font-size: 24px; } }
+@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .15s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><h1>MyLA</h1><span class="session" id="session">NY Legislature · energy &amp; climate</span></div>
+    <div class="status" id="status"><span class="dot warn"></span><span>Loading from your Google Drive…</span></div>
+  </header>
+  <div id="banner" hidden></div>
+  <div class="strip" id="strip">
+    <div class="tile"><b id="t-tracked">–</b><span>Tracked</span></div>
+    <div class="tile"><b id="t-bills">–</b><span>Energy &amp; climate bills</span></div>
+    <div class="tile"><b id="t-week">–</b><span>Moved in last 7 days</span></div>
+    <div class="tile"><b id="t-hear">–</b><span>Hearings to watch</span></div>
+  </div>
+  <nav role="tablist" id="tabs">
+    <button role="tab" data-tab="tracked" id="tab-tracked">Tracked</button>
+    <button role="tab" data-tab="bills" id="tab-bills">All bills</button>
+    <button role="tab" data-tab="hearings" id="tab-hearings">Hearings</button>
+    <button role="tab" data-tab="budget" id="tab-budget">Budget</button>
+    <button role="tab" data-tab="activity" id="tab-activity">Activity</button>
+  </nav>
+  <section id="view" aria-live="polite"></section>
+</div>
+<script>
+(function () {
+  var INBOX = 'YOUR_INBOX_FOLDER_ID';
+  var DATA_FILE = 'YOUR_DATA_FILE_ID';
+  var SHEET_URL = 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit';
+  var SERVER = 'Google Drive';
+  var RUNNER = 'Claude Code Remote';
+  var CHECK_TASK = 'YOUR_SCHEDULED_TASK_ID';
+  var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
+  try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
+  try { state.pending = JSON.parse(localStorage.getItem('myla-pending') || '{}'); } catch (e) { state.pending = {}; }
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function md(s) {
+    var out = [], inList = false;
+    String(s || '').split('\n').forEach(function (line) {
+      var t = esc(line.trim()).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      if (/^[-•*]\s+/.test(line.trim())) { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + t.replace(/^[-•*]\s+/, '') + '</li>'); return; }
+      if (inList) { out.push('</ul>'); inList = false; }
+      if (/^#{1,4}\s/.test(line.trim())) { out.push('<p><strong>' + t.replace(/^#+\s*/, '') + '</strong></p>'); return; }
+      if (t) out.push('<p>' + t + '</p>');
+    });
+    if (inList) out.push('</ul>');
+    return out.join('');
+  }
+  function daysAgo(d) { if (!d) return 1e9; return (Date.now() - new Date(String(d).slice(0, 10) + 'T12:00:00').getTime()) / 864e5; }
+  function fmtDate(d) { if (!d) return ''; var x = new Date(String(d).slice(0, 10) + 'T12:00:00'); return isNaN(x) ? d : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: x.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' }); }
+  function pillFor(st) {
+    var s = (st || '').toLowerCase(), cls = 'comm';
+    if (/veto/.test(s)) cls = 'veto'; else if (/signed|chapter/.test(s)) cls = 'law'; else if (/governor/.test(s)) cls = 'gov'; else if (/passed/.test(s)) cls = 'pass'; else if (/calendar|third|floor|reported/.test(s)) cls = '';
+    return '<span class="pill ' + cls + '">' + esc(st || 'Introduced') + '</span>';
+  }
+  function num(id) { return String(id || '').split('-')[0]; }
+
+  // ---------- reading the data file through the Google Drive connector
+  function b64ToText(b) {
+    var bin = atob(b.replace(/\s/g, '')), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+  function findData(result) {
+    var found = null;
+    function tryStr(s) {
+      if (found || typeof s !== 'string' || s.length < 2) return;
+      var t = s.trim();
+      if (t.charAt(0) === '{') { try { var j = JSON.parse(t); if (j && (j.bills || j.status)) { found = j; return; } } catch (e) {} }
+      if (/^[A-Za-z0-9+/=\s]+$/.test(t) && t.length > 8) { try { var u = b64ToText(t); if (u.trim().charAt(0) === '{') { var k = JSON.parse(u); if (k && (k.bills || k.status)) found = k; } } catch (e) {} }
+    }
+    function walk(o, depth) {
+      if (found || depth > 6 || o == null) return;
+      if (typeof o === 'string') return tryStr(o);
+      if (typeof o === 'object') { if (o.bills && o.asof) { found = o; return; } Object.keys(o).forEach(function (k) { walk(o[k], depth + 1); }); }
+    }
+    walk(result && result.payload, 0); walk(result && result.content, 0); walk(result, 0);
+    return found;
+  }
+  function errorBanner(err) {
+    var code = err && err.code, msg;
+    if (code === 'needs_reauth') msg = 'Your Google Drive connection has lapsed. Reconnect Google Drive in claude.ai Settings → Connectors, then reload.';
+    else if (code === 'server_not_connected' || code === 'selection_required') msg = 'MyLA reads its data from Google Drive. Add or choose the Google Drive connector in claude.ai Settings → Connectors, then reload.';
+    else if (code === 'not_in_manifest' || code === 'approval_required' || code === 'not_granted' || code === 'consent_required') msg = 'MyLA needs your OK to read its files in Google Drive. Reload the page and allow Google Drive when asked.';
+    else if (code === 'server_unavailable') msg = 'Google Drive didn\'t answer just now. Showing the last copy MyLA loaded; it will refresh shortly.';
+    else msg = 'Could not read MyLA\'s data from Google Drive' + (err && err.message ? ' (' + esc(err.message).slice(0, 140) + ')' : '') + '.';
+    return msg;
+  }
+  function showBanner(html, kind) { var b = $('banner'); b.className = 'banner ' + (kind || ''); b.innerHTML = html; b.hidden = !html; }
+
+  function load() {
+    claude.use('mcp').then(function (mcp) {
+      state.mcp = mcp;
+      if (!mcp) { setStatus('bad', 'This view can\'t reach Google Drive. Open MyLA on claude.ai.'); return; }
+      // First read is a call, so the viewer can be asked for permission; then a watch keeps it fresh.
+      mcp.callTool(SERVER, 'download_file_content', { fileId: DATA_FILE }, { cache: { staleTime: 2 * 60000, gcTime: 7 * 864e5 } })
+        .then(function (r) { var d = findData(r); if (d) accept(d); else fallbackRead(mcp); startWatch(mcp); })
+        .catch(function (e) { onError(mcp, e); });
+    });
+  }
+  function startWatch(mcp) {
+    mcp.watchTool(SERVER, 'download_file_content', { fileId: DATA_FILE }, function (ev) {
+      if (ev.type === 'data') { var d = findData(ev.result); if (d) accept(d); }
+      else onError(mcp, ev.error, true);
+    }, { cache: { staleTime: 5 * 60000, gcTime: 7 * 864e5 }, refetchInterval: 2 * 60000 });
+  }
+  function onError(mcp, err, fromWatch) {
+    var code = err && err.code;
+    if (['needs_reauth', 'server_not_connected', 'blocked_by_policy', 'approval_required', 'not_in_manifest', 'not_granted'].indexOf(code) >= 0) state.data = null;
+    if (fromWatch && code === 'server_unavailable' && state.data) { setStatus('warn', 'Showing the copy loaded earlier; Google Drive didn\'t answer the last refresh.'); return; }
+    var msg = errorBanner(err);
+    if (code === 'approval_required' || code === 'not_granted' || code === 'consent_required') msg += ' <button class="btn" id="allow">Allow and load</button>';
+    showBanner(msg, code === 'server_unavailable' ? 'warn' : 'bad');
+    var a = $('allow');
+    if (a) a.onclick = function () { a.disabled = true; mcp.callTool(SERVER, 'download_file_content', { fileId: DATA_FILE }).then(function (r) { var d = findData(r); if (d) { showBanner(''); accept(d); startWatch(mcp); } }).catch(function (e) { onError(mcp, e); }); };
+    if (code === 'server_unavailable' && !fromWatch) setTimeout(function () { mcp.callTool(SERVER, 'download_file_content', { fileId: DATA_FILE }).then(function (r) { var d = findData(r); if (d) { showBanner(''); accept(d); startWatch(mcp); } }).catch(function () {}); }, 3000 + Math.random() * 3000);
+    render();
+  }
+  function fallbackRead(mcp) {
+    mcp.callTool(SERVER, 'read_file_content', { fileId: DATA_FILE }).then(function (r) {
+      var d = findData(r);
+      if (d) accept(d); else showBanner('MyLA\'s data file in Google Drive is empty or unreadable. If you just set MyLA up, wait for the first check to finish.', 'warn');
+    }).catch(function (e) { showBanner(errorBanner(e), 'bad'); });
+  }
+  function accept(d) {
+    state.data = d;
+    if (!d.bills) { setStatus('warn', 'Waiting for the first check. Finish the setup in the MyLA Google Sheet.'); showBanner('MyLA hasn\'t run yet. Open the <a href="' + SHEET_URL + '">MyLA Sheet</a> and follow the setup steps.', 'warn'); render(); return; }
+    // drop pending flags that have landed
+    Object.keys(state.pending).forEach(function (id) { var b = byId(id); if (b && b.tr === state.pending[id].on) delete state.pending[id]; else if (Date.now() - state.pending[id].at > 3 * 3600e3) delete state.pending[id]; });
+    savePending();
+    var bf = d.backfill;
+    if (d.errors && d.errors.length && daysAgo(d.errors[0].at) < 1.5) showBanner('Last check reported a problem: ' + esc(d.errors[0].msg), 'warn');
+    else if (bf && bf.stage !== 'done') showBanner('Loading the ' + d.session + '–' + (Number(d.session) + 1) + ' session: ' + (bf.total ? (bf.total - (bf.ids ? bf.ids.length : 0)) + ' of ' + bf.total + ' bills read' : 'searching') + '. This finishes on its own within the hour.', 'warn');
+    else showBanner('');
+    var when = d.lastCheck || d.asof;
+    setStatus(d.errors && d.errors.length && daysAgo(d.errors[0].at) < 1.5 ? 'warn' : '', 'Last check ' + new Date(when).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' · <a href="' + SHEET_URL + '">Sheet</a>');
+    $('session').textContent = d.session + '–' + (Number(d.session) + 1) + ' session · energy & climate';
+    render();
+  }
+  function setStatus(kind, html) { $('status').innerHTML = '<span class="dot ' + (kind || '') + '"></span><span>' + html + '</span>'; }
+  function byId(id) { var d = state.data; if (!d || !d.bills) return null; if (!state.index) state.index = {}; if (state.indexFor !== d) { state.index = {}; d.bills.forEach(function (b) { state.index[b.id] = b; }); state.indexFor = d; } return state.index[id] || null; }
+  function savePending() { try { localStorage.setItem('myla-pending', JSON.stringify(state.pending)); } catch (e) {} }
+  function isTracked(b) { var p = state.pending[b.id]; return p ? p.on : b.tr; }
+
+  // ---------- actions
+  function setTrack(id, on, btn) {
+    if (!state.mcp) return;
+    btn.disabled = true; btn.textContent = on ? 'Tracking…' : 'Removing…';
+    var op = { op: on ? 'track' : 'untrack', id: id, at: new Date().toISOString() };
+    state.mcp.callTool(SERVER, 'create_file', { title: 'op-' + Date.now() + '.json', parentId: INBOX, contentMimeType: 'text/plain', textContent: JSON.stringify(op), disableConversionToGoogleType: true }, { cache: false })
+      .then(function () {
+        var b = byId(id);
+        var ids = [id].concat(b && b.sa ? b.sa.split(', ').filter(String) : []);
+        ids.forEach(function (x) { var o = byId(x); if (o && !!o.tr === on) delete state.pending[x]; else state.pending[x] = { on: on, at: Date.now() }; });
+        savePending(); render();
+      })
+      .catch(function (e) {
+        btn.disabled = false; btn.textContent = on ? 'Track' : 'Stop tracking';
+        var code = e && e.code;
+        showBanner((code === 'server_unavailable' || code === 'upstream_error') ? 'Not sure the change reached Google Drive. Check the Tracked tab in a few minutes before trying again.' : errorBanner(e), 'bad');
+      });
+  }
+
+  // ---------- views
+  function pairs(list) {
+    // One card per Senate/Assembly pair: hide a bill when its same-as is also in the list and sorts first.
+    var seen = {}, out = [];
+    list.forEach(function (b) {
+      if (seen[b.id]) return;
+      seen[b.id] = 1;
+      (b.sa || '').split(', ').forEach(function (s) { if (s) seen[s] = 1; });
+      out.push(b);
+    });
+    return out;
+  }
+  function billCard(b, full) {
+    var tr = isTracked(b), pend = state.pending[b.id];
+    var sa = (b.sa || '').split(', ').filter(String);
+    var saHtml = sa.length ? '<span class="same">same as ' + sa.map(function (s) { var o = byId(s); var p = s.split('-'); return '<a class="num" href="' + (o ? o.u : 'https://www.nysenate.gov/legislation/bills/' + p[1] + '/' + p[0]) + '">' + esc(p[0]) + '</a>'; }).join(', ') + '</span>' : '<span class="same">no same-as</span>';
+    var isNew = daysAgo(b.pub) <= 7;
+    var h = '<article class="card' + (tr ? ' tracked' : '') + '">' +
+      '<div class="row"><a class="num" href="' + esc(b.u) + '">' + esc(b.p || num(b.id)) + '</a>' + saHtml + (isNew ? '<span class="pill new">New</span>' : '') + '<span class="spacer"></span>' +
+      (pend ? '<span class="meta">' + (pend.on ? 'Tracking…' : 'Removing…') + '</span>' : '') +
+      '<button class="btn' + (tr ? ' ghost' : '') + '" data-track="' + esc(b.id) + '" data-on="' + (tr ? '0' : '1') + '">' + (pend ? 'Undo' : (tr ? 'Stop tracking' : 'Track')) + '</button></div>' +
+      '<div class="title">' + esc(b.t) + '</div>' +
+      '<div class="meta">' + esc(b.sp) + (b.co ? ' + ' + b.co + ' cosponsor' + (b.co > 1 ? 's' : '') : '') + (b.pg ? ' · Program bill: ' + esc(b.pg) : '') + (b.ls ? ' · ' + esc(b.ls) : '') + '</div>' +
+      '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>';
+    if (full) {
+      if (b.sum) h += '<div class="summary">' + md(b.sum) + '</div>';
+      else if (tr) h += '<div class="summary meta">' + (b.q ? 'Summary is being written; it appears after the next scheduled check.' : 'Summary will be written at the next scheduled check.') + '</div>';
+      if (b.ev && b.ev.length) h += '<details' + (daysAgo(b.ev[0].d) < 8 ? ' open' : '') + '><summary>Activity (' + b.ev.length + ')</summary><ul class="timeline">' + b.ev.slice(0, 15).map(function (e) { return '<li><time>' + esc(fmtDate(e.d)) + '</time><span>' + esc(e.t) + '</span></li>'; }).join('') + '</ul></details>';
+    }
+    return h + '</article>';
+  }
+  function runBar(d) {
+    var tracked = pairs(d.bills.filter(isTracked));
+    var waiting = tracked.filter(function (b) { return !b.sum; }).length;
+    var recent = Date.now() - state.runAt < 10 * 60000;
+    var msg = recent ? 'Check started at ' + new Date(state.runAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + '. Summaries usually arrive within 10 minutes, with a push when they\'re ready.' : (waiting ? waiting + ' tracked bill' + (waiting > 1 ? 's are' : ' is') + ' waiting for a summary.' : 'Runs a check now instead of waiting for the next scheduled one.');
+    if (state.runMsg) msg = state.runMsg;
+    return '<div class="card"><div class="row"><span class="meta" style="flex:1;min-width:200px">' + esc(msg) + '</span><button class="btn" id="runcheck"' + (recent ? ' disabled' : '') + '>' + (recent ? 'Check running' : 'Run check now') + '</button></div></div>';
+  }
+  function runCheck(btn) {
+    if (!state.mcp) return;
+    btn.disabled = true; btn.textContent = 'Starting…';
+    var d = state.data || { bills: [] };
+    var wanted = d.bills.filter(function (b) { return isTracked(b) && !b.sum; }).map(function (b) { return b.id; });
+    var text = 'Run requested by the user from the MyLA dashboard.' + (wanted.length ? ' Bills waiting for summaries: ' + wanted.join(', ') + '. If the queue has no summary_needed event for one of these yet, the Google collector (runs every 5 minutes) has not picked it up: wait 60 seconds and read the queue again, up to 8 times, then continue with whatever is there.' : '');
+    state.mcp.callTool(RUNNER, 'fire_trigger', { trigger_id: CHECK_TASK, text: text }, { cache: false })
+      .then(function () { state.runAt = Date.now(); state.runMsg = ''; try { localStorage.setItem('myla-runAt', String(state.runAt)); } catch (e) {} render(); })
+      .catch(function (e) {
+        var code = e && e.code;
+        if (code === 'server_not_connected' || code === 'not_in_manifest' || code === 'not_granted') state.runMsg = 'This page can\'t start checks from here. Summaries will arrive at the next scheduled check, or ask Claude in chat to run one.';
+        else if (code === 'needs_reauth') state.runMsg = 'Reconnect Claude Code Remote in claude.ai Settings, then try again.';
+        else if (code === 'server_unavailable' || code === 'upstream_error') state.runMsg = 'Not sure the check started. Wait a few minutes for a push before trying again.';
+        else state.runMsg = 'Couldn\'t start a check' + (e && e.message ? ': ' + String(e.message).slice(0, 120) : '.');
+        render();
+      });
+  }
+  function viewTracked(d) {
+    var list = pairs(d.bills.filter(isTracked));
+    if (!list.length && !Object.keys(state.pending).length) return '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
+    return '<div class="list">' + runBar(d) + list.map(function (b) { return billCard(b, true); }).join('') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>';
+  }
+  function viewBills(d) {
+    var q = state.q.toLowerCase();
+    var list = d.bills.filter(function (b) {
+      if (state.filter === 'week' && daysAgo(b.ld) > 7) return false;
+      if (state.filter === 'new' && daysAgo(b.pub) > 14) return false;
+      if (state.filter === 'core' && b.rel !== 'core') return false;
+      if (state.filter === 'broad' && b.rel !== 'broad') return false;
+      if (q && (b.p + ' ' + b.id + ' ' + b.sa + ' ' + b.t + ' ' + b.sp + ' ' + b.ls).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    list = pairs(list);
+    var chips = [['all', 'All'], ['week', 'Moved this week'], ['new', 'Introduced in last 2 weeks'], ['core', 'Core energy'], ['broad', 'Broader matches']];
+    var h = '<div class="tools"><input id="q" type="search" placeholder="Search number, title, sponsor" value="' + esc(state.q) + '" aria-label="Search bills"></div>' +
+      '<div class="tools">' + chips.map(function (c) { return '<button class="chip" data-filter="' + c[0] + '" aria-pressed="' + (state.filter === c[0]) + '">' + c[1] + '</button>'; }).join('') + '</div>' +
+      '<p class="meta">' + list.length + ' bills' + (list.length !== d.bills.length ? ' shown (Senate–Assembly pairs combined)' : '') + ', most recent action first.</p>';
+    if (!list.length) return h + '<p class="empty">No bills match.</p>';
+    h += '<div class="list">' + list.slice(0, state.shown).map(function (b) { return billCard(b, false); }).join('') + '</div>';
+    if (list.length > state.shown) h += '<button class="btn ghost more" id="more">Show more (' + (list.length - state.shown) + ' left)</button>';
+    return h;
+  }
+  function viewHearings(d) {
+    var hs = d.hearings || [];
+    var watch = hs.filter(function (x) { return x.rel === true; });
+    var checking = hs.filter(function (x) { return x.rel == null && x.match; });
+    var other = hs.filter(function (x) { return !(x.rel === true) && !(x.rel == null && x.match); });
+    function card(x) { return '<article class="card"><div class="row"><span class="h-date">' + esc(x.date) + '</span><span class="title">' + esc(x.subject || 'Public hearing') + '</span></div>' + (x.note ? '<div class="meta">' + esc(x.note) + '</div>' : '') + '<details><summary>Details</summary><pre class="hearing">' + esc(x.text) + '</pre></details><a href="' + esc(x.url) + '">Hearing notice</a></article>'; }
+    var h = '<p class="meta">From the Legislature\'s public hearing calendar. MyLA flags energy and climate hearings and pushes an alert when one is scheduled.</p>';
+    h += watch.length ? '<div class="list">' + watch.map(card).join('') + '</div>' : '<p class="empty">No energy or climate hearings on the calendar right now.</p>';
+    if (checking.length) h += '<h3 class="session">Being checked</h3><div class="list">' + checking.map(card).join('') + '</div>';
+    if (other.length) h += '<details><summary>Other hearings on the calendar (' + other.length + ')</summary><div class="list">' + other.map(card).join('') + '</div></details>';
+    return h;
+  }
+  function viewBudget(d) {
+    var bd = d.budget || {}, briefs = bd.briefs || [], bills = bd.bills || [];
+    var h = '<p class="meta">When a budget version posts (Executive, 30-day amendments, one-house, enacted), MyLA reads the appropriation and revenue bills and the TED Article VII bill, and writes a brief on energy, climate and NYSERDA provisions. Each brief is a Google Doc in your MyLA folder.</p>';
+    h += briefs.length ? '<div class="list">' + briefs.map(function (b) { return '<article class="card"><div class="row"><span class="pill">' + esc(b.stage) + '</span><span class="meta">' + esc(fmtDate(b.date)) + '</span></div><div class="title"><a href="' + esc(b.url) + '">' + esc(b.title) + '</a></div>' + ((b.highlights || []).length ? '<ul class="summary">' + b.highlights.slice(0, 6).map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '') + '</article>'; }).join('') + '</div>' : '<p class="empty">No budget briefs yet. The Governor\'s FY2028 Executive Budget is due by February 1, 2027.</p>';
+    if (bills.length) h += '<details><summary>Budget bills this session (' + bills.length + ')</summary><ul class="timeline">' + bills.map(function (b) { return '<li><a class="num" href="' + esc(b.u) + '">' + esc(b.b + (b.v ? '-' + b.v : '')) + '</a><span>' + esc(b.t) + '</span></li>'; }).join('') + '</ul></details>';
+    return h;
+  }
+  function viewActivity(d) {
+    var a = d.activity || [];
+    if (!a.length) return '<p class="empty">Activity on tracked bills shows up here: committee actions, votes, agendas, passage, signing and vetoes.</p>';
+    return '<ul class="timeline card">' + a.slice(0, 100).map(function (x) { var b = byId(x.id); return '<li><time>' + esc(fmtDate(x.date)) + '</time><span><a class="num" href="' + esc(b ? b.u : '#') + '">' + esc(num(x.id)) + '</a> ' + esc(x.text) + '</span></li>'; }).join('') + '</ul>';
+  }
+  function render() {
+    var d = state.data, v = $('view');
+    document.querySelectorAll('nav button').forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)); });
+    if (!d || !d.bills) { v.innerHTML = '<p class="empty">' + (d ? 'Waiting for MyLA\'s first check.' : 'Loading…') + '</p>'; return; }
+    var tracked = pairs(d.bills.filter(isTracked)).length;
+    $('t-tracked').textContent = tracked;
+    $('t-bills').textContent = pairs(d.bills).length;
+    $('t-week').textContent = pairs(d.bills.filter(function (b) { return daysAgo(b.ld) <= 7; })).length;
+    $('t-hear').textContent = (d.hearings || []).filter(function (x) { return x.rel === true; }).length;
+    $('tab-tracked').textContent = 'Tracked (' + tracked + ')';
+    var fn = { tracked: viewTracked, bills: viewBills, hearings: viewHearings, budget: viewBudget, activity: viewActivity }[state.tab];
+    var focusQ = document.activeElement && document.activeElement.id === 'q', caret = focusQ ? document.activeElement.selectionStart : 0;
+    v.innerHTML = fn(d);
+    if (focusQ) { var q = $('q'); q.focus(); try { q.setSelectionRange(caret, caret); } catch (e) {} }
+  }
+  // ---------- events
+  document.getElementById('tabs').addEventListener('click', function (e) { var b = e.target.closest('button[data-tab]'); if (!b) return; state.tab = b.dataset.tab; state.shown = 60; try { history.replaceState(null, '', '#' + state.tab); } catch (x) { location.hash = state.tab; } render(); });
+  $('view').addEventListener('click', function (e) {
+    var t = e.target.closest('[data-track]'); if (t) { setTrack(t.dataset.track, t.dataset.on === '1', t); return; }
+    var f = e.target.closest('[data-filter]'); if (f) { state.filter = f.dataset.filter; state.shown = 60; render(); return; }
+    if (e.target.id === 'more') { state.shown += 60; render(); }
+    if (e.target.id === 'runcheck') { runCheck(e.target); }
+  });
+  $('view').addEventListener('input', function (e) { if (e.target.id === 'q') { state.q = e.target.value; state.shown = 60; render(); } });
+  function fromHash() { var h = (location.hash || '').slice(1); if (['tracked', 'bills', 'hearings', 'budget', 'activity'].indexOf(h) >= 0) state.tab = h; }
+  window.addEventListener('hashchange', function () { fromHash(); render(); });
+  fromHash(); render();
+  if (window.claude && window.claude.use) load(); else setStatus('bad', 'Open MyLA on claude.ai to load your data.');
+})();
+</script>
+</body>
+</html>
