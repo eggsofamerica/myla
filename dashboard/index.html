@@ -109,6 +109,9 @@ details.fold .timeline { margin-top: 6px; }
 .selbox { width: 24px; height: 24px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--card); color: var(--card); font: 700 14px/1 var(--body); cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
 .selbox[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
 .card.selected { box-shadow: 0 0 0 2px var(--accent-soft); }
+.gaps { font-size: 13px; color: var(--muted); }
+.gaps > summary { font-size: 13px; color: var(--muted); font-weight: 600; }
+.gaps ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; max-width: 70ch; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
 .party { font: 600 11px var(--body); padding: 1px 6px; border-radius: 4px; background: var(--paper); border: 1px solid var(--line); }
@@ -369,6 +372,9 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     Object.keys(seen).sort().forEach(function (v) { out.push('<option value="' + esc(v) + '"' + (v === current ? ' selected' : '') + '>' + esc(v) + '</option>'); });
     return out.join('');
   }
+  function gaps(items) {
+    return '<details class="gaps"><summary>Coverage gaps</summary><ul>' + items.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></details>';
+  }
   function toggleIn(arr, v) { var i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
   function exportBar(all) {
     var n = all.filter(function (b) { return state.sel[b.id]; }).length;
@@ -501,7 +507,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var list = pairs(d.bills.filter(isTracked));
     if (!list.length && !Object.keys(state.pending).length) return '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
     var shown = trackedFiltered(list);
-    return '<div class="list">' + runBar(d) + filterBar(list, shown.length) + exportBar(list) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>';
+    return '<div class="list">' + runBar(d) + filterBar(list, shown.length) + exportBar(list) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>' +
+      gaps(['<strong>Committee agendas:</strong> Senate committee agendas arrive ahead of the meeting, so you get a heads-up before a Senate committee vote. The Assembly does not publish its committee agendas in the data feed, so Assembly committee action shows up only after it is recorded on the bill (for example, "reported" or "held").',
+        '<strong>Sponsor party:</strong> not in the legislature\'s data. Claude looks it up for the sponsors of tracked bills and their same-as bills; a new sponsor shows no badge until the next check.',
+        '<strong>Topics:</strong> tagged automatically from bill titles and summaries by keyword, so a tag can occasionally be off or missing.']);
   }
   function viewBills(d) {
     var q = state.q.toLowerCase(), f = state.af;
@@ -532,7 +541,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<button class="chip" data-aft="recent" aria-pressed="' + !!f.recent + '">Introduced in last 2 weeks</button>' +
       '<span class="spacer"></span>' + (nActive ? '<button class="btn ghost small" id="afclear">Clear filters</button>' : '') +
       '</div></details>' +
-      '<p class="meta">Newest first. Untracked bills show what they looked like when MyLA loaded them; track a bill to follow its progress.</p>';
+      '<p class="meta">Newest first. Untracked bills show what they looked like when MyLA loaded them; track a bill to follow its progress.</p>' +
+      gaps(['<strong>Untracked bills are not kept current.</strong> Status, committee and last action are shown only for tracked bills.',
+        '<strong>Mentions NYSERDA</strong> checks only the title and the legislature\'s one-line summary. A bill that gives NYSERDA a role deep in its text appears only once tracked and summarized.',
+        '<strong>Which bills are included:</strong> bills are found by energy and climate keywords in their titles and summaries. A relevant bill with an unusual title can be missed; search the Senate or Assembly site if you expect a bill that isn\'t here.']);
     if (!list.length) return h + '<p class="empty">No bills match.</p>';
     h += '<div class="list">' + list.slice(0, state.shown).map(function (b) { return billCard(b, false); }).join('') + '</div>';
     if (list.length > state.shown) h += '<button class="btn ghost more" id="more">Show more (' + (list.length - state.shown) + ' left)</button>';
@@ -544,7 +556,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var checking = hs.filter(function (x) { return x.rel == null && x.match; });
     var other = hs.filter(function (x) { return !(x.rel === true) && !(x.rel == null && x.match); });
     function card(x) { return '<article class="card"><div class="row"><span class="h-date">' + esc(x.date) + '</span><span class="title">' + esc(x.subject || 'Public hearing') + '</span></div>' + (x.note ? '<div class="meta">' + esc(x.note) + '</div>' : '') + '<details><summary>Details</summary><pre class="hearing">' + esc(x.text) + '</pre></details><a href="' + esc(x.url) + '">Hearing notice</a></article>'; }
-    var h = '<p class="meta">From the Legislature\'s public hearing calendar. MyLA flags energy and climate hearings and pushes an alert when one is scheduled.</p>';
+    var h = '<p class="meta">From the Legislature\'s public hearing calendar. MyLA flags energy and climate hearings and pushes an alert when one is scheduled.</p>' +
+      gaps(['<strong>Senate-only hearings may be missing.</strong> MyLA reads the hearing calendar posted on the Assembly website, which covers Assembly and joint hearings but may leave out hearings held by the Senate alone. Check nysenate.gov/events for those.',
+        '<strong>Joint budget hearings</strong> (January–February) are announced separately and may not appear here.',
+        'Committee <em>meetings</em> (where bills are voted) are not hearings; for tracked bills, Senate committee agendas appear on the Tracked tab.']);
     h += watch.length ? '<div class="list">' + watch.map(card).join('') + '</div>' : '<p class="empty">No energy or climate hearings on the calendar right now.</p>';
     if (checking.length) h += '<h3 class="session">Being checked</h3><div class="list">' + checking.map(card).join('') + '</div>';
     if (other.length) h += '<details><summary>Other hearings on the calendar (' + other.length + ')</summary><div class="list">' + other.map(card).join('') + '</div></details>';
@@ -552,7 +567,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   }
   function viewBudget(d) {
     var bd = d.budget || {}, briefs = bd.briefs || [], bills = bd.bills || [];
-    var h = '<p class="meta">When a budget version posts (Executive, 30-day amendments, one-house, enacted), MyLA reads the appropriation and revenue bills and the TED Article VII bill, and writes a brief on energy, climate and NYSERDA provisions. Each brief is a Google Doc in your MyLA folder.</p>';
+    var h = gaps(['<strong>Stage labels are a best guess</strong> from dates and bill versions; the brief corrects them when the text shows otherwise.',
+        '<strong>Article VII bills other than TED</strong> (ELFA, HMH, PPGG) are scanned only for passages that name NYSERDA. A Part that refers only to "the authority" after defining it elsewhere can be missed.',
+        '<strong>One-house budgets:</strong> MyLA detects each house\'s amended budget bills. The one-house budget resolutions themselves are not read.',
+        '<strong>Not yet tested on a live budget:</strong> the first real run will be the FY2028 Executive Budget, due by February 1, 2027.']) + '<p class="meta">When a budget version posts (Executive, 30-day amendments, one-house, enacted), MyLA reads the appropriation and revenue bills and the TED Article VII bill, and writes a brief on energy, climate and NYSERDA provisions. Each brief is a Google Doc in your MyLA folder.</p>';
     h += briefs.length ? '<div class="list">' + briefs.map(function (b) { return '<article class="card"><div class="row"><span class="pill">' + esc(b.stage) + '</span><span class="meta">' + esc(fmtDate(b.date)) + '</span></div><div class="title"><a href="' + esc(b.url) + '">' + esc(b.title) + '</a></div>' + ((b.highlights || []).length ? '<ul class="summary">' + b.highlights.slice(0, 6).map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '') + '</article>'; }).join('') + '</div>' : '<p class="empty">No budget briefs yet. The Governor\'s FY2028 Executive Budget is due by February 1, 2027.</p>';
     if (bills.length) h += '<details><summary>Budget bills this session (' + bills.length + ')</summary><ul class="timeline">' + bills.map(function (b) { return '<li><a class="num" href="' + esc(b.u) + '">' + esc(b.b + (b.v ? '-' + b.v : '')) + '</a><span>' + esc(b.t) + '</span></li>'; }).join('') + '</ul></details>';
     return h;
