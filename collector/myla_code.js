@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-22.2',
+    VERSION: '2026-11-22.3',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -25,20 +25,26 @@ globalThis.MyLA = (function () {
 
   // ------------------------------------------------------------------ keywords
   // Search groups are split so each request URL stays well under Apps Script's 2 KB limit.
+  // Bills on public authorities generally (governance, oversight, money), which reach NYSERDA as an authority.
+  var AUTH_GROUP = '"public authority" OR "public authorities" OR "state authority" OR "state authorities" OR "authorities budget office" OR "public benefit corporation" OR "public benefit corporations" OR "public authorities law"';
+  var GEN_AUTH_RE = /\b(public authorit(y|ies)|state authorit(y|ies)|authorities budget office|public benefit corporations?|public authorities law)\b/i;
+  var OTHER_AUTH_RE = /\b(metropolitan transportation|mta|thruway|port authority|battery park|dormitory authority|housing finance|bridge authority|olympic|water (finance )?authority|parking authority|sewer|industrial development agenc\w*|local development corporation|transit authority|canal corporation|convention center|off-track betting|environmental facilities corporation|urban development corporation|roosevelt island|hudson river park|niagara frontier|municipal (housing|water|parking)|county \w+ authority|city of \w+)\b/i;
+  var GENERAL_SCOPE_RE = /\b(all|each|every|any) (public|state) (authorit|benefit)|public authorities law|authorities budget office/i;
   var SEARCH_GROUPS = [
     'energy OR electric* OR electricity OR utility OR utilities OR renewabl* OR solar OR "wind energy" OR "offshore wind" OR "wind turbine" OR "wind turbines"',
     'climate OR "greenhouse gas" OR "greenhouse gases" OR emissions OR "carbon dioxide" OR decarboni* OR "fossil fuel" OR "fossil fuels" OR "zero-emission" OR "zero emission" OR "cap and invest" OR RGGI',
     '"public service commission" OR NYSERDA OR "energy research and development" OR "power authority" OR "power plant" OR "power plants" OR peaker OR "generating facility" OR "generating facilities" OR transmission',
     '"natural gas" OR "gas corporation" OR "gas corporations" OR "gas service" OR pipeline OR pipelines OR ratepayer OR ratepayers OR "net metering" OR microgrid OR microgrids OR "demand response"',
     '"heat pump" OR "heat pumps" OR geothermal OR nuclear OR hydrogen OR "energy storage" OR "battery storage" OR "electric vehicle" OR "electric vehicles" OR "charging station" OR "charging stations"',
-    '"energy code" OR "all-electric" OR electrification OR "thermal energy" OR "district energy" OR weatherization OR "energy efficiency" OR "data center" OR "data centers" OR propane OR "heating oil" OR biofuel OR "renewable natural gas"'
+    '"energy code" OR "all-electric" OR electrification OR "thermal energy" OR "district energy" OR weatherization OR "energy efficiency" OR "data center" OR "data centers" OR propane OR "heating oil" OR biofuel OR "renewable natural gas"',
+    AUTH_GROUP
   ];
   var LAW_NAMES = ['"Public Service Law"', '"Energy Law"'];
   var LAW_FIELDS = ['amendments.items.\\*.lawSection', 'lawSection', '\\*.lawSection'];
   var CORE_LAWS = /^(public service law|energy law)$/i;
   var ENERGY_RE = /\b(energy|electric\w*|utilit(y|ies)|renewabl\w*|solar|wind (energy|turbines?|power|farms?)|offshore wind|climate|greenhouse|emission|carbon dioxide|decarboni\w*|fossil fuel|zero[- ]emission|cap[- ]and[- ]invest|rggi|public service commission|nyserda|energy research and development|power authority|power plants?|peaker|generating facilit\w*|natural gas|gas (corporations?|service|utilit\w*)|pipelines?|ratepayers?|net metering|microgrids?|demand response|heat pumps?|geothermal|nuclear|hydrogen|energy storage|battery storage|electric vehicles?|charging stations?|energy code|all-electric|electrification|thermal energy|district energy|weatherization|energy efficiency|data cent(er|re)s?|propane|heating oil|biofuel|transmission (lines?|facilit\w*|system|projects?|siting))\b/i;
   var EXCLUDE_RE = /\b(agricultur\w*|farm\w*|forest\w*|wildlife|fish\w*|hunting|trapping|wetlands?|pesticides?|deer|invasive species|state parks?|carbon monoxide|hiv|telecommunications?|broadband|cable television|telephone)\b/i;
-  var HEARING_RE = /\b(energy|electric\w*|utilit(y|ies)|public service|psc|nyserda|power authority|nypa|lipa|long island power|renewabl\w*|solar|wind|climate|greenhouse|emissions?|carbon|decarboni\w*|fossil|natural gas|ratepayers?|transmission|grid|nuclear|hydrogen|heat pumps?|building electrification|clcpa|cap[- ]and[- ]invest|affordab\w*|energy costs?)\b/i;
+  var HEARING_RE = /\b(energy|electric\w*|utilit(y|ies)|public service|psc|nyserda|power authority|nypa|lipa|long island power|renewabl\w*|solar|wind|climate|greenhouse|emissions?|carbon|decarboni\w*|fossil|natural gas|ratepayers?|transmission|grid|nuclear|hydrogen|heat pumps?|building electrification|clcpa|cap[- ]and[- ]invest|affordab\w*|energy costs?|public authorit\w*|state authorit\w*|authorities budget office|public benefit corporations?)\b/i;
   var BUDGET_TERMS = [
     [/new york state energy research and development authority|\bnyserda\b|energy research and development authority/ig, 4],
     [/public service commission|department of public service|public service law/ig, 3],
@@ -66,7 +72,8 @@ globalThis.MyLA = (function () {
     ['Workforce & labor', /labor|workforce|prevailing wage|apprentice|union/i],
     ['Environmental justice', /disadvantaged communit|environmental justice|frontline/i],
     ['Data centers & large loads', /data cent|large load|cryptocurrenc|bitcoin/i],
-    ['NYSERDA', /nyserda|energy research and development authority/i]
+    ['NYSERDA', /nyserda|energy research and development authority/i],
+    ['Public authorities', /public authorit(y|ies)|state authorit(y|ies)|authorities budget office|public benefit corporation|public authorities law/i]
   ];
   function tagTopics(b) {
     var text = [b.t, b.sm, b.sum].join(' \n ');
@@ -242,6 +249,12 @@ globalThis.MyLA = (function () {
     var telecom = /telecommunication|broadband|cable television|telephone|wireless|internet/i.test(t);
     if (telecom && !energyTitle) return 'exclude';
     if (energyTitle) return 'core';
+    var authText = t + ' ' + (rec.sm || '');
+    if (GEN_AUTH_RE.test(authText)) {
+      // Bills about one specific non-energy authority (MTA, Thruway, a local authority) don't reach NYSERDA.
+      if (OTHER_AUTH_RE.test(t) && !GENERAL_SCOPE_RE.test(authText)) return 'exclude';
+      return 'authority';
+    }
     if (EXCLUDE_RE.test(t)) return 'exclude';
     if (CORE_LAWS.test(rec.ls || '')) return 'core';
     return ENERGY_RE.test(rec.sm || '') ? 'broad' : 'exclude';
@@ -647,7 +660,7 @@ globalThis.MyLA = (function () {
       if (!info.versions[ver]) { info.versions[ver] = nyNow().day; if (!seedOnly) changed.push(info); }
       db.budget.bills[id] = info;
     });
-    // Rule: of the Article VII language bills, read TED (and Revenue) in full for energy/climate;
+    // the user's rule: of the Article VII language bills, read TED (and Revenue) in full for energy/climate;
     // scan the others only for passages that name NYSERDA.
     changed.forEach(function (c) { c.nyserdaOnly = !budgetBillWanted(c.t); });
     if (!changed.length) return;
@@ -882,7 +895,7 @@ globalThis.MyLA = (function () {
       Object.keys(db.bills).forEach(function (k) { if (db.bills[k].tr) arch[k] = db.bills[k]; });
       DriveApp.getFolderById(CFG.WORK).createFile('archive_' + db.session + '.json', JSON.stringify({ tracked: arch, activity: db.activity }), 'text/plain');
       log('session rollover ' + db.session + ' -> ' + session + '; archived ' + Object.keys(arch).length + ' tracked bills');
-      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = []; db.prevFilled = true;
+      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = []; db.prevFilled = true; db.authDone = true;
       addEvent(db, { type: 'info', detail: 'New legislative session ' + session + '–' + (session + 1) + ' started. MyLA archived last session\'s tracked bills and is loading the new session.' });
     }
     db.session = session;
@@ -1019,6 +1032,25 @@ globalThis.MyLA = (function () {
           did.push('prior sessions');
         } else { db.prevFilled = true; }
       }
+      if ((!db.backfill || db.backfill.stage === 'done') && !db.authDone && timeLeft() > 120000) {
+        // One-time search for public-authority bills in the current session (added Nov 2026).
+        db.authProg = db.authProg || { ids: {} };
+        var hits = 0, ok = true;
+        ['title:(' + AUTH_GROUP + ')', 'summary:(' + AUTH_GROUP + ')'].forEach(function (term) {
+          if (!ok) return;
+          try { hits += addHits(db.authProg.ids, searchAll(db.session, '(' + term + ')'), db.session); }
+          catch (e) { ok = String(e).indexOf('TIME') < 0; if (ok) log('authority search failed: ' + String(e).slice(0, 150)); }
+        });
+        if (ok) {
+          var fresh = Object.keys(db.authProg.ids).filter(function (id) { return !db.bills[id]; });
+          var before = Object.keys(db.bills).length;
+          var leftA = refreshBills(db, fresh, { relevantOnly: true });
+          var added = Object.keys(db.bills).length - before;
+          log('authority bills: ' + hits + ' search hits, ' + fresh.length + ' new candidates, ' + added + ' added' + (leftA.length ? ', ' + leftA.length + ' left for next run' : ''));
+          if (!leftA.length) { db.authDone = true; delete db.authProg; } else { db.authProg.ids = {}; leftA.forEach(function (id) { db.authProg.ids[id] = 1; }); }
+          did.push('authority search');
+        }
+      }
       if (db.backfill && db.backfill.stage !== 'done') {
         runBackfill(db, n); did.push('backfill');
       } else {
@@ -1039,7 +1071,7 @@ globalThis.MyLA = (function () {
       if (did.length) { writeOutputs(db, n); }
       saveDb(db);
       var props = PropertiesService.getScriptProperties();
-      props.setProperty('BUSY', (db.backfill && db.backfill.stage !== 'done') || db.queue.refetch.length || db.pendingNew.length || !db.prevFilled ? '1' : '0');
+      props.setProperty('BUSY', (db.backfill && db.backfill.stage !== 'done') || db.queue.refetch.length || db.pendingNew.length || !db.prevFilled || !db.authDone ? '1' : '0');
       if (db.lastSlot) props.setProperty('LAST_SLOT', db.lastSlot);
       props.setProperty('SESSION', String(db.session));
       props.setProperty('CODE_VERSION', CFG.VERSION);

@@ -35,6 +35,8 @@ const DB = {
   'A200-2025': bill('A200', 2025, 'Relates to the establishment of a thermal energy network program', { sameAs: 'S100', law: 'Public Service Law', sponsor: 'John Roe' }),
   'S300-2025': bill('S300', 2025, 'Relates to farm wildlife habitat programs', { law: 'Environmental Conservation Law' }),
   'A400-2025': bill('A400', 2025, 'Relates to the powers of the public service commission', { law: 'Public Service Law' }),
+  'S600-2025': bill('S600', 2025, 'Relates to the authorities budget office and reporting by public authorities', { law: 'Public Authorities Law' }),
+  'S601-2025': bill('S601', 2025, 'Relates to the metropolitan transportation authority board', { law: 'Public Authorities Law', summary: 'Relates to the MTA, a public authority' }),
   'S500-2025': bill('S500', 2025, 'Relates to broadband telecommunications access', { law: 'Public Service Law' }),
   'S3003-2025': bill('S3003', 2025, 'Enacts into law major components of legislation necessary to implement the state education, labor and family assistance budget for the 2025-2026 state fiscal year', { budget: true, text: BUDGET_TEXT.replace('New York state energy research and development authority', 'state energy office') }),
   'S3006-2025': bill('S3006', 2025, 'Enacts into law major components of legislation necessary to implement the state transportation, economic development and environmental conservation budget', { budget: true, text: BUDGET_TEXT }),

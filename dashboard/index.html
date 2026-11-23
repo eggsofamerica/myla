@@ -172,7 +172,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   var SERVER = 'Google Drive';
   var RUNNER = 'Claude Code Remote';
   var EXPORTS = 'YOUR_EXPORTS_FOLDER_ID';
-  var CHECK_TASK = 'YOUR_SCHEDULED_TASK_ID';
+  var CHECK_TASK = 'YOUR_TRIGGER_ID';
   var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
   try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
   state.ui = {};
@@ -743,7 +743,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<label>Sponsor<select data-af="sp">' + sponsorOpts(d.bills, f.sp) + '</select></label>' +
       '<label>Chamber<select data-af="ch"><option value="">Both</option><option' + (f.ch === 'Senate' ? ' selected' : '') + '>Senate</option><option' + (f.ch === 'Assembly' ? ' selected' : '') + '>Assembly</option></select></label>' +
       '<label>Same-as<select data-af="sa"><option value="">Either</option><option value="yes"' + (f.sa === 'yes' ? ' selected' : '') + '>Has same-as</option><option value="no"' + (f.sa === 'no' ? ' selected' : '') + '>No same-as</option></select></label>' +
-      '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option><option value="manual"' + (f.rel === 'manual' ? ' selected' : '') + '>Added by you</option></select></label>' +
+      '<label>Match<select data-af="rel"><option value="">All matches</option><option value="core"' + (f.rel === 'core' ? ' selected' : '') + '>Core energy</option><option value="broad"' + (f.rel === 'broad' ? ' selected' : '') + '>Broader matches</option><option value="authority"' + (f.rel === 'authority' ? ' selected' : '') + '>Public authorities (may affect NYSERDA)</option><option value="manual"' + (f.rel === 'manual' ? ' selected' : '') + '>Added by you</option></select></label>' +
       '</div>' + topicChips(list, f.tps, 'data-atp') + '<div class="tools">' +
       '<button class="chip" data-aft="nys" aria-pressed="' + !!f.nys + '">Mentions NYSERDA</button>' +
       '<button class="chip" data-aft="recent" aria-pressed="' + !!f.recent + '">Introduced in last 2 weeks</button>' +
@@ -753,7 +753,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<p class="meta">Newest first. Untracked bills show what they looked like when MyLA loaded them; track a bill to follow its progress.</p>' +
       gaps(['<strong>Untracked bills are not kept current.</strong> Status, committee and last action are shown only for tracked bills.',
         '<strong>Mentions NYSERDA</strong> checks only the title and the legislature\'s one-line summary. A bill that gives NYSERDA a role deep in its text appears only once tracked and summarized.',
-        '<strong>Which bills are included:</strong> bills are found by energy and climate keywords in their titles and summaries. A relevant bill with an unusual title can be missed; search the Senate or Assembly site if you expect a bill that isn\'t here.']);
+        '<strong>Public authority bills:</strong> bills on public authorities generally (governance, oversight, reporting, finances) are included because they reach NYSERDA as an authority. Bills about a single non-energy authority (MTA, Thruway, local authorities) are left out, and so are procurement, MWBE and FOIL bills unless they name NYSERDA.',
+        '<strong>Which bills are included:</strong> bills are found by energy, climate and public-authority keywords in their titles and summaries. A relevant bill with an unusual title can be missed; search the Senate or Assembly site if you expect a bill that isn\'t here.']);
     if (!list.length) return h + '<p class="empty">No bills match.</p>';
     h += '<div class="list">' + list.slice(0, state.shown).map(function (b) { return billCard(b, false); }).join('') + '</div>';
     if (list.length > state.shown) h += '<button class="btn ghost more" id="more">Show more (' + (list.length - state.shown) + ' left)</button>';
