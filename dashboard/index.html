@@ -753,7 +753,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   }
   function viewTracked(d) {
     var list = pairs(d.bills.filter(isTracked));
-    if (!list.length && !Object.keys(state.pending).length) return addBox(d) + '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
+    if (!list.length && !Object.keys(state.pending).length) return runBar(d) + addBox(d) + '<p class="empty">You aren\'t tracking any bills yet. Open <strong>All bills</strong> and tap Track on the ones you care about. MyLA then writes a summary and alerts you when they move.</p>';
     var shown = trackedFiltered(list);
     return '<div class="list">' + runBar(d) + addBox(d) + filterBar(list, shown.length) + exportBar(list) + (shown.length ? shown.map(function (b) { return billCard(b, true); }).join('') : '<p class="empty">No tracked bills match these filters.</p>') + '</div>' + '<p class="meta">Stop tracking a bill with its button, or untick it in the Sheet. Changes take effect within 5 minutes.</p>' +
       gaps(['<strong>Committee agendas:</strong> Senate committee agendas arrive ahead of the meeting, so you get a heads-up before a Senate committee vote. The Assembly does not publish its committee agendas in the data feed, so Assembly committee action shows up only after it is recorded on the bill (for example, "reported" or "held").',
@@ -890,7 +890,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     $('tab-tracked').textContent = 'Tracked (' + tracked + ')';
     var fn = { tracked: viewTracked, bills: viewBills, hearings: viewHearings, budget: viewBudget, activity: viewActivity }[state.tab];
     var focusQ = document.activeElement && document.activeElement.id === 'q', caret = focusQ ? document.activeElement.selectionStart : 0;
-    v.innerHTML = fn(d);
+    v.innerHTML = (state.tab === 'tracked' ? '' : '<div class="list" style="margin-bottom:12px">' + runBar(d) + '</div>') + fn(d);
     if (focusQ) { var q = $('q'); q.focus(); try { q.setSelectionRange(caret, caret); } catch (e) {} }
   }
   // ---------- events
