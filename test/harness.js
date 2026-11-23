@@ -23,7 +23,8 @@ global.Utilities = {
       .replace(/(^|-)M(-|$)/, `$1${+o.month}$2`).replace(/-d-/, `-${+o.day}-`).replace(/-H-/, `-${+o.hour}-`).replace(/-u$/, `-${dow}`);
   },
   computeDigest(alg, s) { return [...crypto.createHash('md5').update(s, 'utf8').digest()].map(b => b > 127 ? b - 256 : b); },
-  DigestAlgorithm: { MD5: 'md5' }, Charset: { UTF_8: 'utf8' }, sleep() {}
+  DigestAlgorithm: { MD5: 'md5' }, Charset: { UTF_8: 'utf8' }, sleep() {},
+  newBlob(bytes) { return { getDataAsString: () => Buffer.from(bytes.map(b => b & 255)).toString('latin1') }; }
 };
 // ---------- Drive
 let fileSeq = 0;
@@ -38,7 +39,7 @@ function wrap(f) {
 }
 function folderObj(id) {
   return {
-    createFile: (n, c) => mkFile(n, c, id),
+    createFile: (n, c) => (n && typeof n === 'object') ? mkFile(n.getName(), n._data, id) : mkFile(n, c, id),
     getFiles: () => iter(Object.values(files).filter(f => f.parent === id && !f.trashed)),
     getFilesByName: n => iter(Object.values(files).filter(f => f.parent === id && !f.trashed && f.name === n))
   };
@@ -87,7 +88,8 @@ const calls = [];
 function respond(url) {
   calls.push(url);
   const r = API.handle(url);
-  return { getResponseCode: () => r.code, getContentText: () => r.body, getHeaders: () => ({}) };
+  const blob = { _data: r.body, _name: 'download', getBytes: () => Array.from(Buffer.from(r.body, 'latin1')), getContentType: () => r.type || 'text/html', setName(n) { this._name = n; return this; }, getName() { return this._name; } };
+  return { getResponseCode: () => r.code, getContentText: () => r.body, getHeaders: () => ({ 'Content-Type': r.type || 'text/html' }), getBlob: () => blob };
 }
 global.UrlFetchApp = { fetch: (u) => respond(u), fetchAll: reqs => reqs.map(r => respond(r.url)) };
 

@@ -138,6 +138,12 @@ details.fold .timeline { margin-top: 6px; }
 .h-date { font: 700 18px var(--display); min-width: 64px; }
 .hl { display: grid; gap: 4px; }
 pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; color: var(--muted); }
+.agenda { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 4px; }
+.agenda li { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.agenda li.panel { font: 600 12px var(--display); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.agenda input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.rvstat { font-size: 14px; border-left: 3px solid var(--accent, #2b6cb0); padding: 4px 8px; background: var(--soft, rgba(0,0,0,.03)); }
+.floorbox { border-top: 1px solid var(--line); padding-top: 8px; }
 @media (max-width: 520px) { .strip { grid-template-columns: repeat(2, 1fr); } h1 { font-size: 24px; } }
 @media (prefers-reduced-motion: no-preference) { .card { transition: border-color .15s; } }
 </style>
@@ -182,6 +188,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   state.adds = {};
   try { state.adds = JSON.parse(localStorage.getItem('myla-adds') || '{}'); } catch (e) { state.adds = {}; }
   function saveAdds() { try { localStorage.setItem('myla-adds', JSON.stringify(state.adds)); } catch (e) {} }
+  state.hsel = {};   // hearing key -> {index: true}
+  state.hpend = {};  // hearing key -> {at, what}
+  try { state.hpend = JSON.parse(localStorage.getItem('myla-hpend') || '{}'); } catch (e) { state.hpend = {}; }
+  function saveHpend() { try { localStorage.setItem('myla-hpend', JSON.stringify(state.hpend)); } catch (e) {} }
   function isOn(v) { return Array.isArray(v) ? v.length > 0 : !!v; }
   function clearF(f) { Object.keys(f).forEach(function (k) { f[k] = Array.isArray(f[k]) ? [] : (typeof f[k] === 'boolean' ? false : ''); }); }
   function hasAll(b, tps) { return tps.every(function (t) { return (b.tp || []).indexOf(t) >= 0; }); }
@@ -270,6 +280,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       .then(function (r) {
         var p = r && r.payload, files = (p && p.files) || [];
         files.forEach(function (f) {
+          var hq = String(f.title || '').match(/^(hreview|hcancel)__([0-9a-f]+)__(\d+)\.json$/);
+          if (hq) { if (!state.hpend[hq[2]] || state.hpend[hq[2]].at < Number(hq[3])) state.hpend[hq[2]] = { at: Number(hq[3]), what: hq[1] === 'hcancel' ? 'cancel' : 'review' }; return; }
           var a = String(f.title || '').match(/^add__([A-Z]\d+-\d{4})__(\d+)\.json$/);
           if (a) { if (!state.adds[a[1]]) state.adds[a[1]] = { at: Number(a[2]) }; return; }
           var m = String(f.title || '').match(/^(track|untrack)__([A-Z]\d+-\d{4})__(\d+)\.json$/);
@@ -277,7 +289,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
           var at = Number(m[3]), cur = state.pending[m[2]];
           if (!cur || cur.at <= at) state.pending[m[2]] = { on: m[1] === 'track', at: at };
         });
-        savePending(); saveAdds(); render();
+        savePending(); saveAdds(); saveHpend(); render();
       })
       .catch(function () {});
   }
@@ -312,6 +324,12 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     Object.keys(state.pending).forEach(function (id) { var b = byId(id); if (b && b.tr === state.pending[id].on) delete state.pending[id]; else if (Date.now() - state.pending[id].at > 3 * 3600e3) delete state.pending[id]; });
     savePending();
     Object.keys(state.adds).forEach(function (id) { if (byId(id) || Date.now() - state.adds[id].at > 6 * 3600e3) delete state.adds[id]; });
+    Object.keys(state.hpend).forEach(function (k) {
+      var hx = (d.hearings || []).filter(function (x) { return x.key === k; })[0], p = state.hpend[k];
+      var landed = hx && (p.what === 'cancel' ? !hx.rv : (hx.rv && hx.rv.req && Date.parse(hx.rv.req + 'T23:59:59') >= p.at - 864e5 && !hx.rv.auto));
+      if (landed || Date.now() - p.at > 3 * 3600e3) delete state.hpend[k];
+    });
+    saveHpend();
     saveAdds();
     var bf = d.backfill;
     if (d.errors && d.errors.length && daysAgo(d.errors[0].at) < 1.5) showBanner('Last check reported a problem: ' + esc(d.errors[0].msg), 'warn');
@@ -345,6 +363,16 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
         showBanner((code === 'server_unavailable' || code === 'upstream_error') ? 'Not sure the change reached Google Drive. Check the Tracked tab in a few minutes before trying again.' : errorBanner(e), 'bad');
       });
   }
+
+  function hearingOp(key, op, btn) {
+    if (!state.mcp) return;
+    btn.disabled = true; var was = btn.textContent; btn.textContent = 'Sending…';
+    var name = (op.op === 'hearing_review_cancel' ? 'hcancel' : 'hreview') + '__' + key + '__' + Date.now() + '.json';
+    state.mcp.callTool(SERVER, 'create_file', { title: name, parentId: INBOX, contentMimeType: 'text/plain', textContent: JSON.stringify(op), disableConversionToGoogleType: true }, { cache: false })
+      .then(function () { state.hpend[key] = { at: Date.now(), what: op.op === 'hearing_review_cancel' ? 'cancel' : 'review' }; delete state.hsel[key]; saveHpend(); render(); })
+      .catch(function (e) { btn.disabled = false; btn.textContent = was; showBanner(errorBanner(e), 'bad'); });
+  }
+  function hearingByKey(k) { return ((state.data && state.data.hearings) || []).filter(function (x) { return x.key === k; })[0]; }
 
   // ---------- views
   function pairs(list) {
@@ -666,6 +694,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       (tr ? '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>' : '<div class="meta">Introduced ' + esc(fmtDate(b.pub)) + '</div>') +
       priorLine(b) +
       (full && tr ? progressBlock(b) : '') +
+      (full && tr ? floorBlock(b) : '') +
       (full && committeeOf(b) ? '<div class="meta">Committee: ' + esc(committeeOf(b)) + (b.cm ? '' : ' (last)') + '</div>' : '') +
       (b.man ? '<div class="tags"><span class="tag man">Added by you</span></div>' : '') +
       ((b.tp || []).length ? '<div class="tags">' + b.tp.map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '');
@@ -683,6 +712,20 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     }
     return h + '</article>';
   }
+  function floorBlock(b) {
+    var ids = [b.id].concat((b.sa || '').split(', ').filter(String));
+    var items = ((state.data && state.data.floor) || []).filter(function (f) { return f.bills.some(function (x) { return ids.indexOf(x) >= 0; }); });
+    if (!items.length) return '';
+    items.sort(function (a, c) { return String(c.date).localeCompare(String(a.date)); });
+    var ui = state.ui[b.id] || {};
+    return '<details class="fold" data-fold="floor" data-id="' + esc(b.id) + '"' + (ui.floorClosed ? '' : ' open') + '><summary>Floor debate (' + items.length + ')</summary>' + items.map(function (f) {
+      var head = '<div class="meta"><strong>' + esc(cap1(f.ch)) + ' · ' + esc(fmtDate(f.date)) + '</strong></div>';
+      if (f.st === 'done') return head + '<div class="summary">' + md(f.sum) + '</div>';
+      var msg = { wait: 'Waiting for the transcript. Senate transcripts usually post within days; Assembly transcripts can take a few weeks.', sent: 'Transcript found; the summary is written at the next check.', none: f.note || 'The bill was not debated (or not found) in that day\'s transcript.', gaveup: 'No transcript was posted for this day within 75 days.' }[f.st] || f.st;
+      return head + '<div class="meta">' + esc(msg) + '</div>';
+    }).join('') + '</details>';
+  }
+  function cap1(s) { s = String(s || '').toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); }
   function runBar(d) {
     var tracked = pairs(d.bills.filter(isTracked));
     var waiting = tracked.filter(function (b) { return !b.sum; }).length;
@@ -761,16 +804,61 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     return h;
   }
   function viewHearings(d) {
-    var hs = d.hearings || [];
-    var watch = hs.filter(function (x) { return x.rel === true; });
-    var checking = hs.filter(function (x) { return x.rel == null && x.match; });
-    var other = hs.filter(function (x) { return !(x.rel === true) && !(x.rel == null && x.match); });
-    function card(x) { return '<article class="card"><div class="row"><span class="h-date">' + esc(x.date) + '</span><span class="title">' + esc(x.subject || 'Public hearing') + '</span></div>' + (x.note ? '<div class="meta">' + esc(x.note) + '</div>' : '') + '<details><summary>Details</summary><pre class="hearing">' + esc(x.text) + '</pre></details><a href="' + esc(x.url) + '">Hearing notice</a></article>'; }
-    var h = '<p class="meta">From the Legislature\'s combined public hearing calendar (Senate, Assembly and joint). MyLA flags energy and climate hearings and pushes an alert when one is scheduled.</p>' +
+    var hs = (d.hearings || []).slice();
+    var today = new Date().toISOString().slice(0, 10);
+    hs.sort(function (a, b) { var A = a.iso || '', B = b.iso || ''; var fa = A >= today, fb = B >= today; if (fa !== fb) return fa ? -1 : 1; return fa ? A.localeCompare(B) : B.localeCompare(A); });
+    var reviewed = hs.filter(function (x) { return x.rv; });
+    var watch = hs.filter(function (x) { return !x.rv && x.rel === true; });
+    var checking = hs.filter(function (x) { return !x.rv && x.rel == null && x.match; });
+    var other = hs.filter(function (x) { return !x.rv && !(x.rel === true) && !(x.rel == null && x.match); });
+    function rvStatus(x) {
+      var r = x.rv, p = state.hpend[x.key];
+      if (p) return '<div class="rvstat">' + (p.what === 'cancel' ? 'Cancelling the review request…' : 'Review request sent. MyLA picks it up within 5 minutes.') + '</div>';
+      if (!r) return '';
+      var what = r.all ? 'the whole hearing' : (r.picks && r.picks.length ? r.picks.length + ' witness' + (r.picks.length > 1 ? 'es' : '') + ': ' + r.picks.map(function (t) { return t.split(',')[0]; }).join('; ') : '');
+      var billsTxt = (r.bills || []).length ? 'the parts on tracked bill' + (r.bills.length > 1 ? 's ' : ' ') + r.bills.map(function (id) { return id.split('-')[0]; }).join(', ') : '';
+      var scope = [what, billsTxt].filter(String).join(' + ') || 'the hearing';
+      if (r.st === 'done' && r.brief) return '<div class="rvstat"><strong>Review ready:</strong> <a href="' + esc(r.brief.url) + '">' + esc(r.brief.title || 'Open the review') + '</a>' + ((r.brief.highlights || []).length ? '<ul class="summary">' + r.brief.highlights.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : '') + '<div class="meta">Covered ' + esc(scope) + '.</div></div>';
+      if (r.st === 'none') return '<div class="rvstat">' + esc((r.brief && r.brief.note) || 'Nothing on energy, climate or NYSERDA in the selected portions.') + '</div>';
+      if (r.st === 'sent') return '<div class="rvstat">Transcript found. Reviewing ' + esc(scope) + ' at the next check.</div>';
+      return '<div class="rvstat">' + (r.auto ? 'Names tracked bill' + ((r.bills || []).length > 1 ? 's' : '') + '; MyLA will review ' : 'Review requested for ') + esc(scope) + '. Waiting for the transcript (Assembly transcripts usually post about a month after the hearing).' + (r.auto ? '' : ' <button class="btn ghost small" data-hcancel="' + esc(x.key) + '">Cancel</button>') + '</div>';
+    }
+    function agendaBox(x) {
+      var past = (x.iso || '') <= today, sel = state.hsel[x.key] || {}, n = Object.keys(sel).length;
+      var busy = !!state.hpend[x.key];
+      var h = '';
+      if (x.agenda && x.agenda.length) {
+        var lastP = -1;
+        h += '<ul class="agenda">' + x.agenda.map(function (it, i) {
+          var hd = it.p !== lastP && it.p > 0 ? '<li class="panel">Panel ' + it.p + '</li>' : '';
+          lastP = it.p;
+          return hd + '<li><input type="checkbox" data-hpick="' + esc(x.key) + '" data-i="' + i + '"' + (sel[i] ? ' checked' : '') + ' id="hp-' + esc(x.key) + '-' + i + '"><label for="hp-' + esc(x.key) + '-' + i + '">' + esc(it.t) + '</label></li>';
+        }).join('') + '</ul>';
+        h += '<div class="row"><button class="btn" data-hreview="' + esc(x.key) + '"' + (n && !busy ? '' : ' disabled') + '>Review selected' + (n ? ' (' + n + ')' : '') + '</button><button class="btn ghost" data-hall="' + esc(x.key) + '"' + (busy ? ' disabled' : '') + '>Review whole hearing</button></div>';
+        h += '<div class="meta">Picking a witness includes their panel\'s questions and answers. MyLA reads only those pages when the transcript posts.</div>';
+      } else {
+        h += '<div class="meta">' + (past ? 'Witness list not posted yet. The Assembly posts it with the hearing video, usually within a few days; Senate-only hearings have none before the transcript.' : 'The witness list appears after the hearing, when the video is posted. You can request a whole-hearing review now, or come back to pick witnesses.') + '</div>';
+        h += '<div class="row"><button class="btn ghost" data-hall="' + esc(x.key) + '"' + (busy ? ' disabled' : '') + '>Review whole hearing</button></div>';
+      }
+      return h;
+    }
+    function card(x) {
+      var r = x.rv, done = r && (r.st === 'done' || r.st === 'none');
+      var showPicker = !r || done || (r.auto && r.st === 'wait');
+      return '<article class="card"><div class="row"><span class="h-date">' + esc(x.date) + '</span><span class="title">' + esc(x.subject || 'Public hearing') + '</span></div>' +
+        (x.note ? '<div class="meta">' + esc(x.note) + '</div>' : '') + rvStatus(x) +
+        (showPicker ? '<details class="fold"' + (x.agenda && !r ? ' open' : '') + '><summary>' + (x.agenda ? 'Witnesses (' + x.agenda.length + ')' : 'Request a transcript review') + '</summary>' + agendaBox(x) + '</details>' : '') +
+        '<details><summary>Notice</summary><pre class="hearing">' + esc(x.notice || x.text) + '</pre></details><a href="' + esc(x.url) + '">Hearing notice</a></article>';
+    }
+    var h = '<p class="meta">From the Legislature\'s combined public hearing calendar. MyLA flags energy and climate hearings and pushes an alert when one is scheduled, and again when the witness list is posted. Pick witnesses (or the whole hearing) and MyLA reviews the transcript for energy, climate and NYSERDA when it posts. Hearings whose notice names a tracked bill are reviewed automatically, for the parts on that bill.</p>' +
       gaps(['<strong>Source:</strong> the New York State Legislature\'s combined Public Hearing Calendar (posted on the Assembly website), which lists Senate, Assembly and joint hearings. A hearing announced only on a senator\'s or committee\'s own page, and not on the combined calendar, could be missed.',
         '<strong>Joint budget hearings</strong> (January–February) are announced separately and may not appear here.',
-        'Committee <em>meetings</em> (where bills are voted) are not hearings; for tracked bills, Senate committee agendas appear on the Tracked tab.']);
-    h += watch.length ? '<div class="list">' + watch.map(card).join('') + '</div>' : '<p class="empty">No energy or climate hearings on the calendar right now.</p>';
+        '<strong>Transcripts lag:</strong> Assembly and joint hearing transcripts (from the Assembly\'s video archive) have been posting roughly a month after the hearing; Senate hearing transcripts come through the Senate\'s data feed on their own schedule. Reviews run when they appear, for up to five months.',
+        '<strong>Witness lists</strong> come from the Assembly\'s video index, so they exist for Assembly and joint hearings only. For Senate-only hearings, choose the whole hearing.',
+        '<strong>Written testimony</strong> submitted at hearings is not read yet; only what is said on the record.',
+        'Committee <em>meetings</em> (where bills are voted) have no transcripts; for tracked bills, Senate committee agendas appear on the Tracked tab.']);
+    if (reviewed.length) h += '<h3 class="session">Reviews</h3><div class="list">' + reviewed.map(card).join('') + '</div>';
+    h += '<h3 class="session">Energy &amp; climate</h3>' + (watch.length ? '<div class="list">' + watch.map(card).join('') + '</div>' : '<p class="empty">No energy or climate hearings on the calendar right now.</p>');
     if (checking.length) h += '<h3 class="session">Being checked</h3><div class="list">' + checking.map(card).join('') + '</div>';
     if (other.length) h += '<details><summary>Other hearings on the calendar (' + other.length + ')</summary><div class="list">' + other.map(card).join('') + '</div></details>';
     return h;
@@ -823,6 +911,10 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     var ex = e.target.closest('[data-export]'); if (ex) { doExport(ex.dataset.export, ex); }
     var tt = e.target.closest('[data-tft]'); if (tt) { state.tf[tt.dataset.tft] = !state.tf[tt.dataset.tft]; render(); }
     if (e.target.id === 'tfclear') { clearF(state.tf); render(); }
+    var hr = e.target.closest('[data-hreview]');
+    if (hr) { var hk = hr.dataset.hreview, hx = hearingByKey(hk), sl = state.hsel[hk] || {}; var picks = Object.keys(sl).map(function (i) { return hx.agenda[+i].t; }); if (picks.length) hearingOp(hk, { op: 'hearing_review', key: hk, picks: picks, all: false }, hr); return; }
+    var ha = e.target.closest('[data-hall]'); if (ha) { hearingOp(ha.dataset.hall, { op: 'hearing_review', key: ha.dataset.hall, picks: [], all: true }, ha); return; }
+    var hcx = e.target.closest('[data-hcancel]'); if (hcx) { hearingOp(hcx.dataset.hcancel, { op: 'hearing_review_cancel', key: hcx.dataset.hcancel }, hcx); return; }
     var hb = e.target.closest('[data-hist]');
     if (hb) { var u = state.ui[hb.dataset.hist] = state.ui[hb.dataset.hist] || {}; u.allHist = !u.allHist; u.actOpen = true; saveUi(); render(); }
   });
@@ -833,11 +925,12 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     if (d.id === 'addbox') { state.addOpen = d.open; return; }
     if (!d.dataset || !d.dataset.fold) return;
     var u = state.ui[d.dataset.id] = state.ui[d.dataset.id] || {};
-    if (d.dataset.fold === 'sum') u.sumClosed = !d.open; else u.actOpen = d.open;
+    if (d.dataset.fold === 'sum') u.sumClosed = !d.open; else if (d.dataset.fold === 'floor') u.floorClosed = !d.open; else u.actOpen = d.open;
     saveUi();
   }, true);
   $('view').addEventListener('change', function (e) {
     var ds = e.target.dataset || {};
+    if (ds.hpick) { var m = state.hsel[ds.hpick] = state.hsel[ds.hpick] || {}; if (e.target.checked) m[ds.i] = 1; else delete m[ds.i]; var n = Object.keys(m).length, rb = document.querySelector('[data-hreview="' + ds.hpick + '"]'); if (rb) { rb.disabled = !n; rb.textContent = 'Review selected' + (n ? ' (' + n + ')' : ''); } return; }
     if (ds.tf) { state.tf[ds.tf] = e.target.value; render(); }
     if (ds.af) { state.af[ds.af] = e.target.value; state.shown = 60; render(); }
   });

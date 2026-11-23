@@ -54,6 +54,20 @@ const HEARINGS_HTML = `<html><body><div id="nav"><a href="/leg/">Bills</a></div>
 <li>Nov. 23<ul><li>Assembly Standing Committee on Corporations, Authorities and Commissions</li><li>Public Hearing: Federal Impacts to Public-Private Partnerships for Transmission</li><li>Place: Assembly Hearing Room, 250 Broadway, 19th Floor</li><li>Time: 10:00 A.M.</li><li>/comm/?id=9&sec=story&story=119826</li></ul></li></ul></body></html>`;
 function handle(url) {
   const u = new URL(url);
+  if (u.hostname === 'nystateassembly.granicus.com') {
+    const g = state.granicus || {};
+    if (/ViewPublisher/.test(u.pathname)) return { code: 200, body: (g['view' + u.searchParams.get('view_id')] || '<table></table>') };
+    if (/AgendaViewer/.test(u.pathname)) return { code: 200, body: g.agenda || '' };
+    if (/MinutesViewer/.test(u.pathname)) return { code: 200, type: 'application/pdf', body: '%PDF-1.7 fake transcript ' + u.searchParams.get('clip_id') };
+    return { code: 404, body: '' };
+  }
+  if (u.hostname === 'nyassembly.gov' && u.pathname.startsWith('/testimony')) {
+    const id = +u.searchParams.get('ph_id'), ph = (state.ph || {})[id];
+    if (ph) return { code: 200, body: ph };
+    if (state.phFill && id >= 1441 && id < state.phFill) return { code: 200, body: phPage(id, 'Some Other Hearing on Libraries', 'October 1, 2026', []) };
+    return { code: 200, body: '<html><head><title>Legislative Proceeding Testimony/Transcript</title></head><body></body></html>' };
+  }
+  if (u.hostname === 'nyassembly.gov' && u.pathname.startsWith('/write/upload/publichearing')) return { code: 200, type: 'application/pdf', body: '%PDF-1.4 fake testimony ' + u.pathname };
   if (u.hostname === 'nyassembly.gov') return { code: 200, body: state.hearingsHtml || HEARINGS_HTML };
   if (!u.searchParams.get('key')) return { code: 401, body: '{"success":false,"errorCode":701}' };
   const p = decodeURIComponent(u.pathname).replace('/api/3', '');
@@ -77,7 +91,17 @@ function handle(url) {
     if (!b) return { code: 404, body: '{"success":false}' };
     return ok({ responseType: 'bill', result: b });
   }
+  if ((m = p.match(/^\/transcripts\/(\d{4})$/))) return list(((state.senTx || {}).list || []));
+  if ((m = p.match(/^\/transcripts\/(\d{4}-\d\d-\d\dT[\d:]+)/))) { const t = ((state.senTx || {}).texts || {})[m[1]]; return t ? ok({ result: { dateTime: m[1], text: t } }) : { code: 404, body: '{}' }; }
+  if ((m = p.match(/^\/hearings\/(\d{4})$/))) return list(((state.senHear || {}).list || []));
+  if ((m = p.match(/^\/hearings\/(\d+)$/))) { const h = ((state.senHear || {}).items || {})[m[1]]; return h ? ok({ result: h }) : { code: 404, body: '{}' }; }
   if ((m = p.match(/^\/agendas\/(\d+)\/(\d+)\/(.+)$/))) return ok({ result: { committeeAgendaId: {}, addenda: { items: [{ meeting: { meetingDateTime: '2026-11-25T11:00:00', location: 'Room 124 CAP' } }] } } });
   return { code: 404, body: '{}' };
 }
-module.exports = { handle, state, DB, bill };
+function phPage(id, title, date, docs, tx) {
+  return '<html><head><title>Legislative Proceeding Testimony/Transcript</title><style>body{font-family:arial}</style></head><body><div id="heading"><h2>' + title + '</h2><p>' + date + '<br>10:00 AM<br>Hearing Room B</p></div>' +
+    (tx ? '<h3><a href="https://nyassembly.gov/write/upload/publichearing/00' + id + '/transcript.pdf">Transcript</a></h3>' : '<h3>Transcript</h3>') +
+    '<h3>Oral Testimony</h3>' + docs.filter(d => !d.w).map((d, i) => '<p><a href="https://nyassembly.gov/write/upload/publichearing/00' + id + '/00' + (6000 + i) + '.pdf">' + d.n + '</a><br>' + d.o + '</p>').join('') +
+    '<h3>Written Testimony</h3>' + docs.filter(d => d.w).map((d, i) => '<p><a href="https://nyassembly.gov/write/upload/publichearing/00' + id + '/00' + (7000 + i) + '.pdf">' + d.n + '</a><br>' + d.o + '</p>').join('') + '<p>' + 'x'.repeat(1600) + '</p></body></html>';
+}
+module.exports = { handle, state, DB, bill, phPage };

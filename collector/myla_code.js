@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-22.4',
+    VERSION: '2026-11-22.7',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -361,6 +361,7 @@ globalThis.MyLA = (function () {
       var text = a.text + (a.chamber ? ' (' + cap(a.chamber) + ')' : '');
       addActivity(db, rec.id, text, a.date);
       addEvent(db, { type: 'bill_action', bill: rec.id, printNo: rec.p, title: rec.t, detail: text, date: a.date, major: MAJOR_RE.test(a.text), url: rec.u });
+      if (FLOOR_ACT_RE.test(a.text) && a.chamber && a.date) queueFloor(db, rec, a.chamber, a.date);
     });
     var votes = (b.votes && b.votes.items) || [];
     votes.slice(prevSnap.vn).forEach(function (v) {
@@ -579,7 +580,9 @@ globalThis.MyLA = (function () {
       h.found = nyNow().day;
       h.match = HEARING_RE.test(h.subject + ' ' + h.text);
       h.rel = h.match ? null : false;   // Claude decides relevance for keyword matches
+      h.iso = hearingIso(h);
       db.hearings[h.key] = h;
+      autoReview(db, h, h.text);
       n++;
       if (h.match && !firstRun) addEvent(db, { type: 'hearing', key: h.key, date: h.date, subject: h.subject, text: h.text, url: h.link });
       if (h.match && firstRun) h.rel = null;
@@ -591,8 +594,329 @@ globalThis.MyLA = (function () {
     }
     // Drop hearings found more than 120 days ago
     var cutoff = fmt(new Date(Date.now() - 120 * 864e5), 'yyyy-MM-dd');
-    Object.keys(db.hearings).forEach(function (k) { if (db.hearings[k].found < cutoff) delete db.hearings[k]; });
+    Object.keys(db.hearings).forEach(function (k) {
+      var x = db.hearings[k];
+      if (x.found >= cutoff) return;
+      if (x.rv && (x.rv.st === 'wait' || x.rv.st === 'sent') && x.found >= fmt(new Date(Date.now() - 200 * 864e5), 'yyyy-MM-dd')) return;
+      (x.txFiles || []).forEach(function (f) { try { DriveApp.getFileById(f.id).setTrashed(true); } catch (e) {} });
+      delete db.hearings[k];
+    });
     log('hearings: ' + hs.length + ' on calendar, ' + n + ' new');
+  }
+
+
+  // ------------------------------------------------------------------ transcripts: floor debate + hearings
+  // Sources: Senate floor and Senate hearing transcripts from Open Legislation (text);
+  // Assembly floor and Assembly/joint hearing transcripts (PDF) and hearing agendas from Granicus.
+  // The collector only finds and stages files in the work folder; the Claude check extracts and summarizes.
+  var FLOOR_ACT_RE = /^(PASSED (SENATE|ASSEMBLY)|LOST|DEFEATED)\b/i;
+  var GRANICUS = 'https://nystateassembly.granicus.com/';
+  var MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+  var GCACHE = {};
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+  function dayDiff(a, b) { return Math.round((Date.parse(b + 'T12:00:00') - Date.parse(a + 'T12:00:00')) / 864e5); }
+  function isoFromMDY(s) {
+    var m = String(s).match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/i);
+    if (!m) return '';
+    return m[3] + '-' + p2(MONTHS[m[1].toLowerCase()]) + '-' + p2(+m[2]);
+  }
+  function hearingIso(h) {
+    var m = String(h.date || '').match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})/i);
+    if (!m) return '';
+    var mo = MONTHS[m[1].toLowerCase()], y = +String(h.found || nyNow().day).slice(0, 4);
+    var fm = +String(h.found || nyNow().day).slice(5, 7);
+    if (mo < fm - 6) y += 1;   // a January hearing found in November
+    return y + '-' + p2(mo) + '-' + p2(+m[2]);
+  }
+  function gfetch(u) { return UrlFetchApp.fetch(u, { muteHttpExceptions: true, followRedirects: true, headers: { 'User-Agent': 'Mozilla/5.0 (MyLA personal tracker)' } }); }
+  function absG(u) { u = String(u).replace(/&amp;/g, '&'); if (/^https?:/i.test(u)) return u; if (/^\/\//.test(u)) return 'https:' + u; return GRANICUS + u.replace(/^\//, ''); }
+  function cellText(c) { return c.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#0?39;|&rsquo;/g, "'").replace(/\s+/g, ' ').trim(); }
+  // Rows of a Granicus archive list: view 6 = Assembly floor sessions, view 8 = public hearings.
+  function granicusRows(view) {
+    if (GCACHE[view]) return GCACHE[view];
+    var r = gfetch(GRANICUS + 'ViewPublisher.php?view_id=' + view);
+    if (r.getResponseCode() !== 200) throw new Error('Granicus list ' + view + ' HTTP ' + r.getResponseCode());
+    var html = r.getContentText(), out = [];
+    // Recent years come first; the first ~600 KB covers well over a year.
+    (html.slice(0, 900000).match(/<tr[\s\S]*?<\/tr>/gi) || []).forEach(function (row) {
+      var cells = row.match(/<td[\s\S]*?<\/td>/gi);
+      if (!cells || cells.length < 3) return;
+      var date = isoFromMDY(cellText(cells[1])) || isoFromMDY(cellText(row));
+      if (!date) return;
+      var ag = (row.match(/href\s*=\s*["']([^"']*AgendaViewer[^"']*)["']/i) || [])[1];
+      var tx = (row.match(/href\s*=\s*["']([^"']*MinutesViewer[^"']*)["']/i) || [])[1];
+      out.push({ name: cellText(cells[0]), date: date, agenda: ag ? absG(ag) : '', tx: tx ? absG(tx) : '' });
+    });
+    GCACHE[view] = out;
+    return out;
+  }
+  function savePdf(u, name) {
+    var r = gfetch(u);
+    if (r.getResponseCode() !== 200) throw new Error('transcript download HTTP ' + r.getResponseCode());
+    var blob = r.getBlob();
+    var head = Utilities.newBlob(blob.getBytes().slice(0, 5)).getDataAsString();
+    if (head !== '%PDF-') throw new Error('transcript is not a PDF (' + blob.getContentType() + ')');
+    return DriveApp.getFolderById(CFG.WORK).createFile(blob.setName(name)).getId();
+  }
+  function sigTokens(s) {
+    return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(function (w) {
+      return w.length > 3 && !/^(assembly|senate|public|hearing|joint|committee|standing|legislative|state|york|with|from|that|this|their|programs?|review)$/.test(w);
+    });
+  }
+  function matchRow(rows, h) {
+    var same = rows.filter(function (r) { return r.date === h.iso; });
+    if (!same.length) return null;
+    var ht = sigTokens(h.subject), best = null, bestN = 0;
+    same.forEach(function (r) {
+      var rt = sigTokens(r.name), n = ht.filter(function (w) { return rt.indexOf(w) >= 0; }).length;
+      if (n > bestN) { best = r; bestN = n; }
+    });
+    return bestN >= 1 ? best : null;
+  }
+
+  // ---- floor debate on tracked bills
+  function queueFloor(db, rec, chamber, date) {
+    db.floor = db.floor || {};
+    var ch = String(chamber).toUpperCase();
+    var ids = [rec.id].concat((rec.sa || '').split(', ').filter(String));
+    var dup = Object.keys(db.floor).some(function (k) {
+      var f = db.floor[k];
+      return f.ch === ch && f.date === date && f.bills.some(function (x) { return ids.indexOf(x) >= 0; });
+    });
+    if (dup) return;
+    var key = ch.charAt(0) + '|' + date + '|' + rec.id;
+    db.floor[key] = { bills: ids, pn: ids.map(function (x) { return x.split('-')[0]; }), ch: ch, date: date, since: nyNow().day, st: 'wait', title: rec.t };
+    addActivity(db, rec.id, 'Floor debate: waiting for the ' + cap(ch) + ' transcript of ' + date);
+  }
+  function senateFloorFiles(date) {
+    var j = api('/transcripts/' + date.slice(0, 4), { limit: 1000 });
+    var items = ((j && j.result && j.result.items) || []).filter(function (it) { return String(it.dateTime || '').slice(0, 10) === date; });
+    if (!items.length) return null;
+    var text = items.map(function (it) {
+      var f = api('/transcripts/' + encodeURIComponent(it.dateTime) + (items.length > 1 && it.sessionType ? '/' + encodeURIComponent(it.sessionType) : ''), {});
+      return (f && f.result && f.result.text) || '';
+    }).join('\n\n');
+    if (text.length < 1000) return null;
+    return [{ id: DriveApp.getFolderById(CFG.WORK).createFile('floor_senate_' + date + '.txt', text, 'text/plain').getId(), kind: 'txt' }];
+  }
+  function assemblyFloorFiles(date) {
+    var rows = granicusRows(6).filter(function (r) { return r.date === date && r.tx; });
+    if (!rows.length) return null;
+    return rows.map(function (r, i) { return { id: savePdf(r.tx, 'floor_assembly_' + date + '_' + (i + 1) + '.pdf'), kind: 'pdf', name: r.name }; });
+  }
+  function checkFloor(db) {
+    var keys = Object.keys(db.floor || {}).filter(function (k) { return db.floor[k].st === 'wait'; });
+    db.floorSrc = db.floorSrc || {};
+    keys.forEach(function (k) {
+      if (timeLeft() < 60000) return;
+      var f = db.floor[k], sk = f.ch.charAt(0) + '|' + f.date;
+      try {
+        var files = db.floorSrc[sk] || (f.ch === 'SENATE' ? senateFloorFiles(f.date) : assemblyFloorFiles(f.date));
+        if (files && files.length) {
+          db.floorSrc[sk] = files;
+          f.st = 'sent'; f.files = files;
+          addEvent(db, { type: 'floor_debate', key: k, bills: f.bills, printNos: f.pn, chamber: f.ch, date: f.date, title: f.title, files: files });
+          log('floor transcript found: ' + f.ch + ' ' + f.date + ' for ' + f.pn.join('/'));
+        } else if (dayDiff(f.since, nyNow().day) > 75) {
+          f.st = 'gaveup';
+          log('floor transcript never posted: ' + f.ch + ' ' + f.date + ' (' + f.pn.join('/') + ')');
+        }
+      } catch (e) { log('floor check ' + k + ' failed: ' + String(e).slice(0, 160)); }
+    });
+  }
+  function releaseFloorSrc(db, sk) {
+    var still = Object.keys(db.floor || {}).some(function (k) { var f = db.floor[k]; return f.st === 'sent' && (f.ch.charAt(0) + '|' + f.date) === sk; });
+    if (still || !(db.floorSrc || {})[sk]) return;
+    db.floorSrc[sk].forEach(function (x) { try { DriveApp.getFileById(x.id).setTrashed(true); } catch (e) {} });
+    delete db.floorSrc[sk];
+  }
+
+
+  // ---- Assembly testimony pages (nyassembly.gov/testimony/?ph_id=N): transcript + written testimony PDFs
+  var PH_URL = 'https://nyassembly.gov/testimony/?ph_id=';
+  var UA = { 'User-Agent': 'Mozilla/5.0 (MyLA personal tracker)' };
+  function parsePh(html) {
+    if (!html || html.length < 1500) return null;
+    var body = cellText(html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<title[\s\S]*?<\/title>/gi, ' ')).replace(/^.*?Testimony\/Transcript\s*/i, '');
+    var dm = body.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/);
+    if (!dm) return null;
+    var title = body.slice(0, body.indexOf(dm[0])).trim().slice(0, 250);
+    var docs = [], tx = '', m, rx = /<a[^>]+href\s*=\s*["']([^"']*publichearing\/\d+\/(\d+|transcript)\.pdf)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    var writtenAt = html.search(/written\s+testimony/i);
+    while ((m = rx.exec(html))) {
+      var u = m[1].replace(/&amp;/g, '&'); if (!/^https?:/.test(u)) u = 'https://nyassembly.gov' + (u.charAt(0) === '/' ? '' : '/') + u;
+      if (m[2] === 'transcript') { tx = u; continue; }
+      var after = cellText(html.slice(rx.lastIndex, rx.lastIndex + 400).split(/<a\s|<\/p>|<h\d|<\/li>|<\/tr>|<\/div>/i)[0]).slice(0, 160);
+      docs.push({ name: cellText(m[3]).slice(0, 120), org: after, url: u, written: writtenAt > 0 && m.index > writtenAt });
+    }
+    return { t: title, d: isoFromMDY(dm[0]), tx: tx, docs: docs };
+  }
+  function scanPh(db) {
+    db.ph = db.ph || {};
+    var today = nyNow().day, next = db.phNext || 1441, emptyChunks = 0, guard = 0;
+    while (guard++ < 10 && emptyChunks < 2 && timeLeft() > 80000) {
+      var ids = []; for (var i = 0; i < 20; i++) ids.push(next + i);
+      var rs = UrlFetchApp.fetchAll(ids.map(function (id) { return { url: PH_URL + id, muteHttpExceptions: true, headers: UA }; }));
+      var any = false;
+      rs.forEach(function (r, k) {
+        var info = r.getResponseCode() === 200 ? parsePh(r.getContentText()) : null;
+        if (!info) return;
+        any = true;
+        db.phMax = Math.max(db.phMax || 0, ids[k]);
+        if (info.d && dayDiff(info.d, today) < 240) db.ph[ids[k]] = { t: info.t, d: info.d };
+      });
+      emptyChunks = any ? 0 : emptyChunks + 1;
+      next += 20;
+    }
+    db.phNext = (db.phMax || 1440) + 1;
+    Object.keys(db.ph).forEach(function (id) { if (dayDiff(db.ph[id].d, today) > 240) delete db.ph[id]; });
+  }
+  function matchPh(db, h) {
+    var best = null, bestN = 0, ht = sigTokens(h.subject);
+    Object.keys(db.ph || {}).forEach(function (id) {
+      var x = db.ph[id];
+      if (x.d !== h.iso) return;
+      var n = ht.filter(function (w) { return sigTokens(x.t).indexOf(w) >= 0; }).length;
+      if (n > bestN) { best = id; bestN = n; }
+    });
+    return best;
+  }
+  function nameHit(pick, name) {
+    var toks = String(pick).split(',')[0].toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(function (w) { return w.length > 2; });
+    var nm = String(name).toLowerCase();
+    return toks.length && nm.indexOf(toks[toks.length - 1]) >= 0 && (toks.length === 1 || nm.indexOf(toks[0]) >= 0);
+  }
+
+  // ---- hearings: agenda (witness list), review requests, transcripts
+  function trackedMentions(db, text) {
+    if (!text) return [];
+    var hits = [];
+    Object.keys(db.bills).forEach(function (id) {
+      var b = db.bills[id];
+      if (!b.tr) return;
+      var m = id.match(/^([AS])(\d+)/);
+      var word = m[1] === 'A' ? 'Assembly' : 'Senate';
+      var rx = new RegExp('\\b' + m[1] + '\\.?\\s?-?0*' + m[2] + '\\b|\\b' + word + '\\s+(Bill|Print)\\s+(No\\.?\\s*)?0*' + m[2] + '\\b', 'i');
+      if (rx.test(text)) hits.push(id);
+    });
+    return hits;
+  }
+  function autoReview(db, h, text) {
+    var hits = trackedMentions(db, text);
+    if (!hits.length) return;
+    var all = {};
+    hits.forEach(function (id) { all[id] = 1; (db.bills[id].sa || '').split(', ').filter(String).forEach(function (x) { all[x] = 1; }); });
+    var bills = Object.keys(all);
+    if (h.rv) { h.rv.bills = (h.rv.bills || []).concat(bills.filter(function (x) { return (h.rv.bills || []).indexOf(x) < 0; })); return; }
+    h.rv = { auto: true, bills: bills, picks: [], all: false, st: 'wait', req: nyNow().day };
+    hits.forEach(function (id) { addActivity(db, id, 'Hearing on ' + (h.iso || h.date) + ' (' + h.subject + ') names this bill; its transcript will be reviewed'); });
+  }
+  function parseAgenda(u) {
+    var r = gfetch(u);
+    if (r.getResponseCode() !== 200) return null;
+    var html = r.getContentText(), items = [], panel = 0, m;
+    var rx = /<a[^>]+meta_id=\d+[^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = rx.exec(html))) {
+      var t = cellText(m[1]);
+      if (!t) continue;
+      if (/^panel\b/i.test(t)) { panel++; continue; }
+      if (/^(opening statements?|testimony( & | and )questions|closing|recess|adjourn)/i.test(t)) continue;
+      if (/^(assembly ?member|assemblyman|assemblywoman|senator|chair(man|woman)?)\b/i.test(t)) continue;   // questioners
+      if (items.some(function (x) { return x.t === t; })) continue;
+      items.push({ p: panel, t: t.slice(0, 220) });
+    }
+    var body = cellText(html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<a[^>]+meta_id[\s\S]*?<\/a>/gi, ' '));
+    var i = body.search(/NOTICE OF PUBLIC HEARING|SUBJECT:|PURPOSE:/i);
+    return { items: items, notice: i >= 0 ? body.slice(i, i + 2500) : '' };
+  }
+  function senateHearings(db) {
+    db.senHear = db.senHear || {};
+    var y = nyNow().day.slice(0, 4), fetched = 0;
+    [y, String(+y - 1)].forEach(function (yr) {
+      var j = api('/hearings/' + yr, { limit: 1000 });
+      ((j && j.result && j.result.items) || []).forEach(function (it) {
+        if (db.senHear[it.id] || fetched >= 6 || timeLeft() < 90000) return;
+        var f = api('/hearings/' + it.id, {});
+        var r0 = (f && f.result) || {};
+        db.senHear[it.id] = { title: String(r0.title || it.filename || '').replace(/\s+/g, ' ').slice(0, 300), date: String(r0.date || '').slice(0, 10) };
+        fetched++;
+      });
+    });
+    return db.senHear;
+  }
+  function matchSenate(sen, h) {
+    var best = null, bestN = 0, ht = sigTokens(h.subject);
+    Object.keys(sen).forEach(function (id) {
+      var s = sen[id];
+      if (s.date !== h.iso) return;
+      var st = sigTokens(s.title), n = ht.filter(function (w) { return st.indexOf(w) >= 0; }).length;
+      if (n > bestN) { best = id; bestN = n; }
+    });
+    return best;
+  }
+  function emitHearingTranscript(db, h) {
+    h.rv.st = 'sent';
+    addEvent(db, { type: 'hearing_transcript', key: h.key, subject: h.subject, date: h.iso, files: h.txFiles, picks: h.rv.picks || [], all: !!h.rv.all, bills: h.rv.bills || [], auto: !!h.rv.auto });
+    log('hearing transcript staged: ' + h.iso + ' ' + h.subject.slice(0, 60));
+  }
+  function checkHearingSources(db) {
+    var today = nyNow().day;
+    var need = Object.keys(db.hearings).map(function (k) { return db.hearings[k]; }).filter(function (h) {
+      h.iso = h.iso || hearingIso(h);
+      if (!h.iso || h.iso > today) return false;
+      var age = dayDiff(h.iso, today);
+      return ((h.rel === true || h.rv) && !h.agenda && age <= 45) || (h.rv && h.rv.st === 'wait' && age <= 150) ||
+        (h.rv && !h.rv.auto && !h.rv.tst && age <= 30);
+    });
+    if (!need.length) return;
+    var rows = [], sen = null;
+    try { rows = granicusRows(8); } catch (e) { log('hearing list failed: ' + String(e).slice(0, 150)); }
+    try { scanPh(db); } catch (e) { log('testimony scan failed: ' + String(e).slice(0, 150)); }
+    need.forEach(function (h) {
+      if (timeLeft() < 60000) return;
+      try {
+        var row = matchRow(rows, h);
+        var phId = h.phId || matchPh(db, h), page = null;
+        if (phId) { h.phId = phId; var pr = gfetch(PH_URL + phId); page = pr.getResponseCode() === 200 ? parsePh(pr.getContentText()) : null; }
+        if (!h.agenda && page && page.docs.length && !(row && row.agenda)) {
+          var oral = page.docs.filter(function (x) { return !x.written; });
+          if (oral.length) { h.agenda = oral.map(function (x) { return { p: 0, t: (x.name + (x.org ? ', ' + x.org : '')).slice(0, 220) }; }); log('hearing witnesses (testimony page): ' + h.iso + ' ' + h.subject.slice(0, 50)); if (h.rel === true && !h.rv) addEvent(db, { type: 'hearing_agenda', key: h.key, subject: h.subject, date: h.iso, witnesses: oral.length }); }
+        }
+        if (h.rv && !h.rv.auto && !h.rv.tst && page && page.docs.length) {
+          var want = h.rv.all ? page.docs.slice(0, 20) : page.docs.filter(function (x) { return (h.rv.picks || []).some(function (pk) { return nameHit(pk, x.name); }); });
+          if (want.length) {
+            var tf = want.map(function (x, i) { return { id: savePdf(x.url, 'testimony_' + h.iso + '_' + h.key + '_' + (i + 1) + '.pdf'), name: x.name + (x.org ? ', ' + x.org : '') }; });
+            h.rv.tst = 'sent'; h.tFiles = tf;
+            addEvent(db, { type: 'hearing_testimony', key: h.key, subject: h.subject, date: h.iso, files: tf, picks: h.rv.picks || [], all: !!h.rv.all });
+            log('written testimony staged: ' + tf.length + ' file(s) for ' + h.subject.slice(0, 50));
+          }
+        }
+        if (row && !h.agenda && row.agenda) {
+          var ag = parseAgenda(row.agenda);
+          if (ag && ag.items.length) {
+            h.agenda = ag.items; h.notice = ag.notice;
+            autoReview(db, h, ag.notice);
+            if (h.rel === true && !h.rv) addEvent(db, { type: 'hearing_agenda', key: h.key, subject: h.subject, date: h.iso, witnesses: ag.items.length });
+            log('hearing agenda: ' + h.iso + ' ' + h.subject.slice(0, 50) + ' (' + ag.items.length + ' witnesses)');
+          }
+        }
+        if (!(h.rv && h.rv.st === 'wait')) return;
+        if (!h.txFiles) {
+          var txu = (row && row.tx) || (page && page.tx);
+          if (txu) h.txFiles = [{ id: savePdf(txu, 'hearing_' + h.iso + '_' + h.key + '.pdf'), kind: 'pdf' }];
+          else if (!row && !page) {
+            if (!sen) sen = senateHearings(db);
+            var sid = matchSenate(sen, h);
+            if (sid) {
+              var f = api('/hearings/' + sid, {});
+              var txt = (f && f.result && f.result.text) || '';
+              if (txt.length > 2000) h.txFiles = [{ id: DriveApp.getFolderById(CFG.WORK).createFile('hearing_' + h.iso + '_' + h.key + '.txt', txt, 'text/plain').getId(), kind: 'txt' }];
+            }
+          }
+        }
+        if (h.txFiles) emitHearingTranscript(db, h);
+      } catch (e) { log('hearing source ' + h.key + ' failed: ' + String(e).slice(0, 160)); }
+    });
   }
 
   // ------------------------------------------------------------------ budget
@@ -768,6 +1092,44 @@ globalThis.MyLA = (function () {
         });
         break;
       }
+      case 'floor': {
+        var fl = (db.floor || {})[op.key];
+        if (!fl) return;
+        fl.st = op.none ? 'none' : 'done'; fl.sum = op.text || ''; fl.note = op.note || ''; fl.at = nyNow().day;
+        addActivity(db, fl.bills[0], op.none ? ('No floor debate on this bill in the ' + cap(fl.ch) + ' transcript of ' + fl.date) : (cap(fl.ch) + ' floor debate summary ready (' + fl.date + ')'));
+        releaseFloorSrc(db, fl.ch.charAt(0) + '|' + fl.date);
+        break;
+      }
+      case 'floor_watch': {   // manual/test: watch a floor date for a bill
+        var fb = db.bills[op.id];
+        if (fb) { queueFloor(db, fb, op.chamber, op.date); db.kick = true; }
+        break;
+      }
+      case 'hearing_review': {
+        var hr = db.hearings[op.key];
+        if (!hr) return;
+        var keepBills = (hr.rv && hr.rv.bills) || [];
+        var oldT = hr.rv && hr.rv.tbrief;
+        hr.rv = { auto: false, bills: keepBills, picks: (op.picks || []).slice(0, 60), all: !!op.all, st: 'wait', req: nyNow().day };
+        if (oldT) hr.rv.tbrief = oldT;
+        if (hr.txFiles) emitHearingTranscript(db, hr); else db.kick = true;
+        break;
+      }
+      case 'hearing_review_cancel': {
+        var hc = db.hearings[op.key];
+        if (hc && hc.rv && hc.rv.st === 'wait') delete hc.rv;
+        break;
+      }
+      case 'hearing_brief': {
+        var hb = db.hearings[op.key];
+        if (!hb || !hb.rv) return;
+        var br = { url: op.url || '', title: op.title || '', highlights: (op.highlights || []).slice(0, 6), note: op.note || '', at: nyNow().day };
+        if (op.pass === 'testimony') { hb.rv.tst = op.none ? 'none' : 'done'; hb.rv.tbrief = br; (hb.tFiles || []).forEach(function (f) { try { DriveApp.getFileById(f.id).setTrashed(true); } catch (e) {} }); delete hb.tFiles; break; }
+        hb.rv.st = op.none ? 'none' : 'done';
+        hb.rv.brief = br;
+        (hb.rv.bills || []).forEach(function (id) { if (db.bills[id] && db.bills[id].tr) addActivity(db, id, 'Hearing review ready: ' + hb.subject + ' (' + hb.iso + ')'); });
+        break;
+      }
       case 'hearing': {
         var h = db.hearings[op.key];
         if (h) { h.rel = !!op.relevant; if (op.note) h.note = op.note; }
@@ -839,7 +1201,8 @@ globalThis.MyLA = (function () {
       version: CFG.VERSION, asof: n.iso, session: session, lastCheck: db.lastCheck || '', backfill: db.backfill || null,
       counts: { bills: bills.length, tracked: bills.filter(function (b) { return b.tr; }).length },
       bills: bills.map(compact),
-      hearings: hearings.map(function (h) { return { key: h.key, date: h.date, subject: h.subject, text: h.text, url: h.link, found: h.found, match: h.match, rel: h.rel, note: h.note || '' }; }),
+      hearings: hearings.map(function (h) { return { key: h.key, date: h.date, iso: h.iso || hearingIso(h), subject: h.subject, text: h.text, url: h.link, found: h.found, match: h.match, rel: h.rel, note: h.note || '', agenda: h.agenda || null, notice: h.notice || '', tx: !!h.txFiles, rv: h.rv ? { st: h.rv.st, tst: h.rv.tst || '', auto: !!h.rv.auto, all: !!h.rv.all, picks: h.rv.picks || [], bills: h.rv.bills || [], req: h.rv.req, brief: h.rv.brief || null, tbrief: h.rv.tbrief || null } : null }; }),
+      floor: Object.keys(db.floor || {}).map(function (k) { var f = db.floor[k]; return { key: k, bills: f.bills, ch: f.ch, date: f.date, st: f.st, sum: f.sum || '', note: f.note || '', at: f.at || '' }; }),
       budget: { briefs: db.budget.briefs.slice(0, 20), bills: Object.keys(db.budget.bills).map(function (k) { var x = db.budget.bills[k]; return { id: x.id, b: x.b, t: x.t, v: x.v, st: x.st, u: x.u, versions: x.versions }; }) },
       activity: db.activity.slice(0, 150),
       errors: db.errors.slice(0, 5),
@@ -1013,7 +1376,7 @@ globalThis.MyLA = (function () {
     log('timer: now every 5 minutes (quick exit when idle)');
   }
   function tick(force) {
-    START = Date.now();
+    START = Date.now(); GCACHE = {};
     try { ensureTimer(); } catch (e) { log('timer update failed: ' + e); }
     if (!needsWork(force)) { flushLog(); return; }
     var lock = LockService.getScriptLock();
@@ -1022,6 +1385,12 @@ globalThis.MyLA = (function () {
     try {
       rollSession(db, n);
       if (ingest(db)) did.push('inbox');
+      if (db.kick) {   // a review request or floor watch just arrived: look for its transcript now
+        delete db.kick;
+        if (timeLeft() > 150000) { try { checkFloor(db); } catch (e) { log('floor failed: ' + e); } }
+        if (timeLeft() > 120000) { try { checkHearingSources(db); } catch (e) { log('hearing sources failed: ' + e); } }
+        did.push('transcripts');
+      }
       db.party = db.party || {}; db.partyAsked = db.partyAsked || {};
       var need = {};
       Object.keys(db.bills).forEach(function (k) {
@@ -1086,6 +1455,8 @@ globalThis.MyLA = (function () {
         if (force || (slot && db.lastSlot !== slot)) {
           regularCheck(db, n);
           if (timeLeft() > 120000) { try { checkHearings(db, false); } catch (e) { log('hearings failed: ' + e); } }
+          if (timeLeft() > 100000) { try { checkFloor(db); } catch (e) { log('floor failed: ' + e); } }
+          if (timeLeft() > 100000) { try { checkHearingSources(db); } catch (e) { log('hearing sources failed: ' + e); } }
           if (inSessionWindow(n) || force) {
             try { checkBudget(db, n, db.session, false); } catch (e) { log('budget failed: ' + e); }
             try { checkBudgetResolutions(db, n, db.session, !db.budget.resSeeded); db.budget.resSeeded = true; } catch (e) { log('resolutions failed: ' + e); }
@@ -1124,7 +1495,7 @@ globalThis.MyLA = (function () {
     files.slice(1).forEach(function (f) { try { f.setTrashed(true); } catch (e) {} });
   }
   function setup() {
-    START = Date.now();
+    START = Date.now(); GCACHE = {};
     var ss = SpreadsheetApp.openById(CFG.SHEET);
     var st = ss.getSheetByName('Settings') || ss.insertSheet('Settings');
     if (!st.getRange('A1').getValue()) {
