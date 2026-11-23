@@ -113,6 +113,20 @@ details.fold .timeline { margin-top: 6px; }
 .gaps { font-size: 13px; color: var(--muted); }
 .gaps > summary { font-size: 13px; color: var(--muted); font-weight: 600; }
 .gaps ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; max-width: 70ch; }
+.prog { display: grid; gap: 6px; padding: 8px 10px; background: var(--paper); border-radius: 8px; }
+.prow { display: grid; grid-template-columns: 64px 62px auto; gap: 4px 8px; align-items: center; font-size: 13px; }
+.prow .plabel { grid-column: 1 / -1; padding-left: 0; }
+@media (min-width: 560px) { .prow { grid-template-columns: 64px 62px 150px 1fr; } .prow .plabel { grid-column: auto; } }
+.pch { font: 600 12px var(--display); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ladder { display: inline-flex; align-items: center; }
+.step { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--line); background: var(--card); display: inline-block; }
+.step.done { background: var(--accent); border-color: var(--accent); }
+.step.now { background: var(--good); border-color: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
+.step.bad { background: var(--bad); border-color: var(--bad); }
+.step.off { opacity: .35; }
+.bar { width: 10px; height: 2px; background: var(--line); display: inline-block; }
+.prior a { color: var(--muted); }
+.legend { font-size: 11px; color: var(--muted); }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .tag.man { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
@@ -162,8 +176,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
   var state = { data: null, tab: 'tracked', q: '', filter: 'all', shown: 60, pending: {}, mcp: null, storedAt: null, runAt: 0, runMsg: '' };
   try { state.runAt = Number(localStorage.getItem('myla-runAt') || 0); } catch (e) {}
   state.ui = {};
-  state.af = { tps: [], sp: '', ch: '', sa: '', rel: '', nys: false, recent: false };
-  state.tf = { cm: '', tps: [], sp: '', pt: '', st: '', ch: '', sa: '', nys: false, recent: false };
+  state.af = { tps: [], sp: '', ch: '', sa: '', rel: '', nys: false, recent: false, prior: false };
+  state.tf = { cm: '', tps: [], sp: '', pt: '', st: '', ch: '', sa: '', nys: false, recent: false, prior: false, split: false };
   state.sel = {}; state.exportMsg = ''; state.addMsg = '';
   state.adds = {};
   try { state.adds = JSON.parse(localStorage.getItem('myla-adds') || '{}'); } catch (e) { state.adds = {}; }
@@ -366,6 +380,56 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
     list.forEach(function (b) { sponsorsOf(b).forEach(function (n) { all.push(n); }); });
     return opts(all, current, 'Any sponsor');
   }
+  // ---- Senate/Assembly pair progress
+  var LADDER = ['Committee', 'Floor', 'Passed house', 'Passed both', 'Governor', 'Law'];
+  function ladderOf(b) {
+    var st = (b.st || '').toLowerCase(), la = (b.la || '').toLowerCase(), both = st + ' ' + la;
+    var own = chamberOf(b).toLowerCase(), other = own === 'senate' ? 'assembly' : 'senate';
+    if (/substituted/.test(st)) return { i: -1, label: b.st, note: 'the other house\'s bill carries the legislation' };
+    if (/veto/.test(both)) return { i: 5, label: 'Vetoed', bad: true };
+    if (/signed|chap\./.test(both)) return { i: 5, label: 'Signed into law' };
+    if (/delivered to governor/.test(both)) return { i: 4, label: 'Delivered to Governor' };
+    if (/substituted/.test(both)) return { i: -1, label: titleCase(b.st || b.la), note: 'the other house is moving its own bill instead' };
+    if (/stricken/.test(both)) return { i: -1, label: 'Stricken' };
+    if (st.indexOf('passed ' + other) >= 0) return { i: 3, label: 'Passed both houses' };
+    if (st.indexOf(other) >= 0) return { i: 2, label: 'Passed ' + titleCase(own) + '; now ' + (b.st || '').replace(/^in /i, 'in ') };
+    if (st.indexOf('passed ' + own) >= 0) return { i: 2, label: 'Passed ' + titleCase(own) };
+    if (/floor|third reading|calendar|advanced/.test(both)) return { i: 1, label: 'On ' + titleCase(own) + ' floor calendar' };
+    return { i: 0, label: b.st || 'In committee' };
+  }
+  function pairOf(b) { return [b].concat((b.sa || '').split(', ').filter(String).map(byId).filter(Boolean)); }
+  function progressBlock(b) {
+    var rows = pairOf(b).sort(function (x, y) { return chamberOf(x) === 'Senate' ? -1 : 1; });
+    return '<div class="prog">' + rows.map(function (r) {
+      var L = ladderOf(r);
+      var dots = LADDER.map(function (name, i) { var cls = L.i < 0 ? 'off' : (i < L.i ? 'done' : i === L.i ? (L.bad ? 'bad' : 'now') : ''); return '<span class="step ' + cls + '" title="' + name + '"></span>'; }).join('<span class="bar"></span>');
+      return '<div class="prow"><span class="pch">' + chamberOf(r) + '</span><a class="num" href="' + esc(r.u) + '">' + esc(r.p || num(r.id)) + '</a>' +
+        '<span class="ladder">' + dots + '</span>' +
+        '<span class="plabel">' + esc(L.label) + (r.ld ? ' <span class="meta">· ' + esc(fmtDate(r.ld)) + '</span>' : '') + (L.note ? ' <span class="meta">(' + esc(L.note) + ')</span>' : '') + '</span></div>';
+    }).join('') + (rows.length < 2 ? '<div class="meta">No same-as bill in the other house yet.</div>' : '') +
+      '<div class="legend">Committee · Floor · Passed house · Passed both · Governor · Law</div></div>';
+  }
+  function pairEvents(b) {
+    var rows = pairOf(b), multi = rows.length > 1, all = [];
+    rows.forEach(function (r) { (r.ev || []).forEach(function (e) { all.push({ d: e.d, t: (multi ? (r.p || num(r.id)) + ': ' : '') + e.t }); }); });
+    all.sort(function (x, y) { return String(y.d).localeCompare(String(x.d)); });
+    return all;
+  }
+  // ---- earlier sessions
+  function priorOf(b) {
+    var seen = {}, out = [];
+    pairOf(b).forEach(function (r) { (r.pv || []).forEach(function (id) { if (!seen[id]) { seen[id] = 1; out.push(id); } }); });
+    out.sort(function (x, y) { return Number(y.split('-')[1]) - Number(x.split('-')[1]); });
+    return out;
+  }
+  function priorLine(b) {
+    var pv = priorOf(b); if (!pv.length) return '';
+    var bySession = {};
+    pv.forEach(function (id) { var p = id.split('-'); (bySession[p[1]] = bySession[p[1]] || []).push(p[0]); });
+    var sessions = Object.keys(bySession).sort().reverse();
+    return '<div class="meta prior">Introduced before in ' + sessions.length + ' earlier session' + (sessions.length > 1 ? 's' : '') + ': ' +
+      sessions.map(function (yr) { return yr + '–' + String(Number(yr) + 1).slice(2) + ' (' + bySession[yr].map(function (n) { return '<a href="https://www.nysenate.gov/legislation/bills/' + yr + '/' + n + '">' + n + '</a>'; }).join(', ') + ')'; }).join(', ') + '</div>';
+  }
   function chamberOf(b) { return /^S/.test(b.p || b.id) ? 'Senate' : 'Assembly'; }
   function committeeOf(b) { return b.cm ? chamberOf(b) + ' ' + titleCase(b.cm) : (b.lc ? titleCase(b.lc) : ''); }
   function titleCase(x) { return String(x || '').toLowerCase().replace(/\b([a-z])/g, function (m) { return m.toUpperCase(); }).replace(/\b(And|Of|The|On|For)\b/g, function (m) { return m.toLowerCase(); }); }
@@ -384,6 +448,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       if (f.sa === 'no' && b.sa) return false;
       if (f.nys && !nysRole(b)) return false;
       if (f.recent && daysAgo(b.ld) > 30) return false;
+      if (f.prior && !priorOf(b).length) return false;
+      if (f.split) { var ls = pairOf(b).map(function (r) { return ladderOf(r).i; }); if (ls.length < 2 || ls[0] === ls[1]) return false; }
       return true;
     });
   }
@@ -580,6 +646,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '</div>' + topicChips(trackedFiltered(all), f.tps, 'data-ttp') + '<div class="tools">' +
       '<button class="chip" data-tft="nys" aria-pressed="' + f.nys + '">NYSERDA has a role</button>' +
       '<button class="chip" data-tft="recent" aria-pressed="' + f.recent + '">Moved in last 30 days</button>' +
+      '<button class="chip" data-tft="split" aria-pressed="' + f.split + '">Houses at different stages</button>' +
+      '<button class="chip" data-tft="prior" aria-pressed="' + f.prior + '">Introduced in earlier sessions</button>' +
       '<span class="spacer"></span>' +
       (active ? '<button class="btn ghost small" id="tfclear">Clear filters</button>' : '') +
       '</div></details>';
@@ -596,6 +664,8 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '<div class="title">' + esc(b.t) + '</div>' +
       '<div class="meta">' + esc(b.sp) + (b.pt ? ' <span class="party p' + esc(b.pt.charAt(0)) + '">' + esc(b.pt) + '</span>' : '') + (b.co ? ' + ' + b.co + ' cosponsor' + (b.co > 1 ? 's' : '') : '') + (b.pg ? ' · Program bill: ' + esc(b.pg) : '') + (b.ls ? ' · ' + esc(b.ls) : '') + '</div>' +
       (tr ? '<div class="row">' + pillFor(b.st) + '<span class="meta">' + esc(fmtDate(b.ld)) + ' · ' + esc((b.la || '').toLowerCase()) + '</span></div>' : '<div class="meta">Introduced ' + esc(fmtDate(b.pub)) + '</div>') +
+      priorLine(b) +
+      (full && tr ? progressBlock(b) : '') +
       (full && committeeOf(b) ? '<div class="meta">Committee: ' + esc(committeeOf(b)) + (b.cm ? '' : ' (last)') + '</div>' : '') +
       (b.man ? '<div class="tags"><span class="tag man">Added by you</span></div>' : '') +
       ((b.tp || []).length ? '<div class="tags">' + b.tp.map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '');
@@ -603,11 +673,12 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       var ui = state.ui[b.id] || {};
       if (b.sum) h += '<details class="fold" data-fold="sum" data-id="' + esc(b.id) + '"' + (ui.sumClosed ? '' : ' open') + '><summary>Summary' + (b.sumAt ? ' <span class="meta">· ' + esc(fmtDate(b.sumAt)) + '</span>' : '') + '</summary><div class="summary">' + md(b.sum) + '</div></details>';
       else if (tr) h += '<div class="summary meta">' + (b.q ? 'Summary is being written. Tap Run check now, or it appears after the next scheduled check.' : 'Summary will be written at the next check.') + '</div>';
-      if (b.ev && b.ev.length) {
-        var all = !!ui.allHist, shown = all ? b.ev : b.ev.slice(0, 8);
-        h += '<details class="fold" data-fold="act" data-id="' + esc(b.id) + '"' + (ui.actOpen === undefined ? (daysAgo(b.ev[0].d) < 8 ? ' open' : '') : (ui.actOpen ? ' open' : '')) + '><summary>Activity (' + b.ev.length + ')</summary><ul class="timeline">' +
+      var evs = pairEvents(b);
+      if (evs.length) {
+        var all = !!ui.allHist, shown = all ? evs : evs.slice(0, 8);
+        h += '<details class="fold" data-fold="act" data-id="' + esc(b.id) + '"' + (ui.actOpen === undefined ? (daysAgo(evs[0].d) < 8 ? ' open' : '') : (ui.actOpen ? ' open' : '')) + '><summary>Activity (' + b.ev.length + ')</summary><ul class="timeline">' +
           shown.map(function (e) { return '<li><time>' + esc(fmtDate(e.d)) + '</time><span>' + esc(e.t) + '</span></li>'; }).join('') + '</ul>' +
-          (b.ev.length > 8 ? '<button class="btn ghost small" data-hist="' + esc(b.id) + '">' + (all ? 'Show recent only' : 'Show full history (' + b.ev.length + ')') + '</button>' : '') + '</details>';
+          (evs.length > 8 ? '<button class="btn ghost small" data-hist="' + esc(b.id) + '">' + (all ? 'Show recent only' : 'Show full history (' + evs.length + ')') + '</button>' : '') + '</details>';
       }
     }
     return h + '</article>';
@@ -657,6 +728,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       if (f.rel && b.rel !== f.rel) return false;
       if (f.nys && (b.tp || []).indexOf('NYSERDA') < 0) return false;
       if (f.recent && daysAgo(b.pub) > 14) return false;
+      if (f.prior && !priorOf(b).length) return false;
       if (q && (b.p + ' ' + b.id + ' ' + b.sa + ' ' + b.t + ' ' + b.sp + ' ' + b.ls).toLowerCase().indexOf(q) < 0) return false;
       return true;
     });
@@ -675,6 +747,7 @@ pre.hearing { white-space: pre-wrap; font: 13px/1.4 var(--body); margin: 0; colo
       '</div>' + topicChips(list, f.tps, 'data-atp') + '<div class="tools">' +
       '<button class="chip" data-aft="nys" aria-pressed="' + !!f.nys + '">Mentions NYSERDA</button>' +
       '<button class="chip" data-aft="recent" aria-pressed="' + !!f.recent + '">Introduced in last 2 weeks</button>' +
+      '<button class="chip" data-aft="prior" aria-pressed="' + !!f.prior + '">Introduced in earlier sessions</button>' +
       '<span class="spacer"></span>' + (nActive ? '<button class="btn ghost small" id="afclear">Clear filters</button>' : '') +
       '</div></details>' +
       '<p class="meta">Newest first. Untracked bills show what they looked like when MyLA loaded them; track a bill to follow its progress.</p>' +

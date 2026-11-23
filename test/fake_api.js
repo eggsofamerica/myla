@@ -18,6 +18,7 @@ function bill(base, session, title, opts = {}) {
     amendments: { items: { [ver]: am }, size: 1 },
     votes: { items: [], size: 0 },
     actions: { items: [{ date: '2025-02-01', chamber: 'SENATE', sequenceNo: 1, text: 'REFERRED TO ENERGY AND TELECOMMUNICATIONS' }], size: 1 },
+    previousVersions: { items: opts.prev || [], size: (opts.prev || []).length },
     committeeAgendas: { items: [] }, calendars: { items: [] }, vetoMessages: { items: [], size: 0 }, approvalMessage: null
   };
 }
@@ -30,7 +31,7 @@ const BUDGET_TEXT = [
   '                             PART D', '     1  Section 1. NYSERDA shall establish a cap and invest program to reduce greenhouse gas emissions.'
 ].join('\n');
 const DB = {
-  'S100-2025': bill('S100', 2025, 'Relates to the establishment of a thermal energy network program', { sameAs: 'A200', law: 'Public Service Law', cos: 3 }),
+  'S100-2025': bill('S100', 2025, 'Relates to the establishment of a thermal energy network program', { sameAs: 'A200', law: 'Public Service Law', cos: 3, prev: [{ basePrintNo: 'S5000', session: 2023 }, { basePrintNo: 'A7000', session: 2021 }, { basePrintNo: 'S5000', session: 2023 }] }),
   'A200-2025': bill('A200', 2025, 'Relates to the establishment of a thermal energy network program', { sameAs: 'S100', law: 'Public Service Law', sponsor: 'John Roe' }),
   'S300-2025': bill('S300', 2025, 'Relates to farm wildlife habitat programs', { law: 'Environmental Conservation Law' }),
   'A400-2025': bill('A400', 2025, 'Relates to the powers of the public service commission', { law: 'Public Service Law' }),

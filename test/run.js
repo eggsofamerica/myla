@@ -22,6 +22,7 @@ assert(ev.some(e => e.type === 'hearing_backlog' && e.items.length === 1), 'hear
 assert(d.hearings.length === 2, 'two distinct hearings stored: ' + d.hearings.length);
 assert(!ev.some(e => e.type === 'budget_posted'), 'no budget event on seed');
 const s100 = d.bills.find(b => b.id === 'S100-2025');
+assert(JSON.stringify(s100.pv) === JSON.stringify(['S5000-2023','A7000-2021']), 'prior versions: ' + JSON.stringify(s100.pv));
 assert(s100.sa === 'A200-2025' && s100.sp === 'Jane Doe' && s100.u.endsWith('/2025/S100'), 'bill fields: ' + JSON.stringify({ sa: s100.sa, sp: s100.sp, u: s100.u }));
 assert(sheets['Bills'].length === 4, 'sheet rows: ' + sheets['Bills'].length);
 

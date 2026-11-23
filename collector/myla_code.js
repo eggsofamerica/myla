@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-22.1',
+    VERSION: '2026-11-22.2',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -274,6 +274,12 @@ globalThis.MyLA = (function () {
     rec.dist = sp.member ? (sp.member.districtCode || '') : '';
     var pc = (b.pastCommittees && b.pastCommittees.items) || [];
     rec.lc = pc.length ? cap(pc[pc.length - 1].chamber) + ' ' + pc[pc.length - 1].name : '';
+    // Earlier sessions' versions of this bill (the legislature links them as previous versions).
+    var pv = (b.previousVersions && b.previousVersions.items) || [];
+    rec.prev = pv.filter(function (x) { return x && x.basePrintNo && Number(x.session) < Number(b.session); })
+      .map(function (x) { return billId(x.basePrintNo, x.session); })
+      .filter(function (x, i, arr) { return arr.indexOf(x) === i; })
+      .sort(function (a, c) { return Number(c.split('-')[1]) - Number(a.split('-')[1]); });
     rec.pub = (b.publishedDateTime || '').slice(0, 10);
     rec.u = billUrl(b.basePrintNo, b.session);
     rec.ch = (b.billType && b.billType.chamber) || (String(b.basePrintNo).charAt(0) === 'S' ? 'SENATE' : 'ASSEMBLY');
@@ -782,7 +788,7 @@ globalThis.MyLA = (function () {
   // ------------------------------------------------------------------ outputs
   var PARTY = {};
   function compact(b) {
-    return { pt: PARTY[b.sp] || '', lc: b.lc || '', ch: b.ch || '', tp: tagTopics(b), id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, man: !!b.manual, tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
+    return { pt: PARTY[b.sp] || '', lc: b.lc || '', ch: b.ch || '', tp: tagTopics(b), id: b.id, p: b.p, t: b.t, sp: b.sp, co: b.co, sa: b.sa, st: b.st, sd: b.sd, cm: b.cm, la: b.la, ld: b.ld, ls: b.ls, pg: b.pg, pub: b.pub, u: b.u, rel: b.rel, man: !!b.manual, pv: b.prev || [], tr: !!b.tr, sum: b.sum || '', sumAt: b.sumAt || '', q: !!b.sumQueued, ev: b.tr ? mergeHist(b) : undefined };
   }
   function mergeHist(b) {
     var hist = b.hist || [], seen = {};
@@ -876,7 +882,7 @@ globalThis.MyLA = (function () {
       Object.keys(db.bills).forEach(function (k) { if (db.bills[k].tr) arch[k] = db.bills[k]; });
       DriveApp.getFolderById(CFG.WORK).createFile('archive_' + db.session + '.json', JSON.stringify({ tracked: arch, activity: db.activity }), 'text/plain');
       log('session rollover ' + db.session + ' -> ' + session + '; archived ' + Object.keys(arch).length + ' tracked bills');
-      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = [];
+      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = []; db.prevFilled = true;
       addEvent(db, { type: 'info', detail: 'New legislative session ' + session + '–' + (session + 1) + ' started. MyLA archived last session\'s tracked bills and is loading the new session.' });
     }
     db.session = session;
@@ -1005,6 +1011,14 @@ globalThis.MyLA = (function () {
       var noHist = Object.keys(db.bills).filter(function (k) { var b = db.bills[k]; return b.tr && (!b.hist || b.dist === undefined) && db.queue.refetch.indexOf(k) < 0; });
       if (noHist.length) { db.queue.refetch = db.queue.refetch.concat(noHist); did.push('history'); }
       try { if (syncSheetTracking(db)) did.push('sheet'); } catch (e) { log('sheet sync failed: ' + e); }
+      if ((!db.backfill || db.backfill.stage === 'done') && !db.prevFilled) {
+        var noPrev = Object.keys(db.bills).filter(function (k) { return db.bills[k].prev === undefined && db.bills[k].rel !== 'exclude'; });
+        if (noPrev.length) {
+          var leftPrev = refreshBills(db, noPrev.slice(0, 400), {});
+          log('prior-session lookup: ' + (Math.min(400, noPrev.length) - leftPrev.length) + ' bills done, ' + (noPrev.length - Math.min(400, noPrev.length) + leftPrev.length) + ' to go');
+          did.push('prior sessions');
+        } else { db.prevFilled = true; }
+      }
       if (db.backfill && db.backfill.stage !== 'done') {
         runBackfill(db, n); did.push('backfill');
       } else {
@@ -1025,7 +1039,7 @@ globalThis.MyLA = (function () {
       if (did.length) { writeOutputs(db, n); }
       saveDb(db);
       var props = PropertiesService.getScriptProperties();
-      props.setProperty('BUSY', (db.backfill && db.backfill.stage !== 'done') || db.queue.refetch.length || db.pendingNew.length ? '1' : '0');
+      props.setProperty('BUSY', (db.backfill && db.backfill.stage !== 'done') || db.queue.refetch.length || db.pendingNew.length || !db.prevFilled ? '1' : '0');
       if (db.lastSlot) props.setProperty('LAST_SLOT', db.lastSlot);
       props.setProperty('SESSION', String(db.session));
       props.setProperty('CODE_VERSION', CFG.VERSION);
