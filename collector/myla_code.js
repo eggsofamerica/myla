@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-22.3',
+    VERSION: '2026-11-22.4',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -29,7 +29,22 @@ globalThis.MyLA = (function () {
   var AUTH_GROUP = '"public authority" OR "public authorities" OR "state authority" OR "state authorities" OR "authorities budget office" OR "public benefit corporation" OR "public benefit corporations" OR "public authorities law"';
   var GEN_AUTH_RE = /\b(public authorit(y|ies)|state authorit(y|ies)|authorities budget office|public benefit corporations?|public authorities law)\b/i;
   var OTHER_AUTH_RE = /\b(metropolitan transportation|mta|thruway|port authority|battery park|dormitory authority|housing finance|bridge authority|olympic|water (finance )?authority|parking authority|sewer|industrial development agenc\w*|local development corporation|transit authority|canal corporation|convention center|off-track betting|environmental facilities corporation|urban development corporation|roosevelt island|hudson river park|niagara frontier|municipal (housing|water|parking)|county \w+ authority|city of \w+)\b/i;
-  var GENERAL_SCOPE_RE = /\b(all|each|every|any) (public|state) (authorit|benefit)|public authorities law|authorities budget office/i;
+  var GENERAL_SCOPE_RE = /\b(all|each|every|any) (public|state) (authorit|benefit)|public authorities law/i;
+  // An authority bill counts only when its TITLE is about authorities themselves (governance, oversight,
+  // reporting, money). Bills that just apply a rule on another topic to "state agencies and public
+  // authorities" (road salt, tolls, buy-American, plastic bottles...) are dropped.
+  var AUTH_TITLE_RE = /\b(public authorit(y|ies)|state authorit(y|ies)|public benefit corporations?|authorities budget office|authorities control board|public authority reform)\b/i;
+  var AUTH_STRONG_RE = /\b(authorities budget office|authorities control board|public authorities law|public authority reform|subsidiar\w* of (a )?public authorit\w*|public authorities reporting)\b/i;
+  var AUTH_GOV_RE = /\b(boards?|board members|members of|directors|trustees|governance|accountab\w*|oversight|audits?|auditing|comptroller|annual reports?|reports? (of|by)|reporting|reviews?|real property|privatiz\w*|debt|bonds?|borrowing|investments?|deposits?|reserves?|budgets?|financial (plans?|statements?|reports?)|compensation|salar(y|ies)|formation|dissolution|reform|powers, functions|contracts by the state comptroller|open meetings)\b/i;
+  var AUTH_MONEY_RE = /\b(funds of the state|funds allocated|transfers? of (funds|moneys|monies)|sweeps?|repayments? to the general fund)\b/i;
+  function authorityTitleOk(t) {
+    if (AUTH_MONEY_RE.test(t)) return true;
+    if (!AUTH_TITLE_RE.test(t) || !(AUTH_STRONG_RE.test(t) || AUTH_GOV_RE.test(t))) return false;
+    // "...to conduct a study on <another topic>": a study on something else doesn't reach NYSERDA.
+    var m = t.match(/\bstud(y|ies)\b(.*)$/i);
+    if (m && !AUTH_TITLE_RE.test(m[2]) && !AUTH_GOV_RE.test(m[2])) return false;
+    return true;
+  }
   var SEARCH_GROUPS = [
     'energy OR electric* OR electricity OR utility OR utilities OR renewabl* OR solar OR "wind energy" OR "offshore wind" OR "wind turbine" OR "wind turbines"',
     'climate OR "greenhouse gas" OR "greenhouse gases" OR emissions OR "carbon dioxide" OR decarboni* OR "fossil fuel" OR "fossil fuels" OR "zero-emission" OR "zero emission" OR "cap and invest" OR RGGI',
@@ -253,7 +268,8 @@ globalThis.MyLA = (function () {
     if (GEN_AUTH_RE.test(authText)) {
       // Bills about one specific non-energy authority (MTA, Thruway, a local authority) don't reach NYSERDA.
       if (OTHER_AUTH_RE.test(t) && !GENERAL_SCOPE_RE.test(authText)) return 'exclude';
-      return 'authority';
+      if (authorityTitleOk(t)) return 'authority';
+      // Otherwise fall through to the ordinary energy tests below.
     }
     if (EXCLUDE_RE.test(t)) return 'exclude';
     if (CORE_LAWS.test(rec.ls || '')) return 'core';
@@ -895,7 +911,7 @@ globalThis.MyLA = (function () {
       Object.keys(db.bills).forEach(function (k) { if (db.bills[k].tr) arch[k] = db.bills[k]; });
       DriveApp.getFolderById(CFG.WORK).createFile('archive_' + db.session + '.json', JSON.stringify({ tracked: arch, activity: db.activity }), 'text/plain');
       log('session rollover ' + db.session + ' -> ' + session + '; archived ' + Object.keys(arch).length + ' tracked bills');
-      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = []; db.prevFilled = true; db.authDone = true;
+      db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = []; db.prevFilled = true; db.authDone = true; db.authTight = true;
       addEvent(db, { type: 'info', detail: 'New legislative session ' + session + '–' + (session + 1) + ' started. MyLA archived last session\'s tracked bills and is loading the new session.' });
     }
     db.session = session;
@@ -1050,6 +1066,18 @@ globalThis.MyLA = (function () {
           if (!leftA.length) { db.authDone = true; delete db.authProg; } else { db.authProg.ids = {}; leftA.forEach(function (id) { db.authProg.ids[id] = 1; }); }
           did.push('authority search');
         }
+      }
+      if (db.authDone && !db.authTight) {
+        // One-time re-check of authority bills under the stricter rule (Nov 2026). Tracked or hand-added bills stay.
+        var dropped = 0, keptA = 0;
+        Object.keys(db.bills).forEach(function (id) {
+          var r = db.bills[id];
+          if (r.rel !== 'authority' || r.tr || r.manual) return;
+          r.rel = classify(r);
+          if (r.rel === 'exclude') dropped++; else if (r.rel === 'authority') keptA++;
+        });
+        log('authority bills re-checked: ' + keptA + ' kept, ' + dropped + ' dropped as off-topic');
+        db.authTight = true; did.push('authority re-check');
       }
       if (db.backfill && db.backfill.stage !== 'done') {
         runBackfill(db, n); did.push('backfill');

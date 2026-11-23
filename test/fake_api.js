@@ -37,6 +37,7 @@ const DB = {
   'A400-2025': bill('A400', 2025, 'Relates to the powers of the public service commission', { law: 'Public Service Law' }),
   'S600-2025': bill('S600', 2025, 'Relates to the authorities budget office and reporting by public authorities', { law: 'Public Authorities Law' }),
   'S601-2025': bill('S601', 2025, 'Relates to the metropolitan transportation authority board', { law: 'Public Authorities Law', summary: 'Relates to the MTA, a public authority' }),
+  'S602-2025': bill('S602', 2025, 'Relates to the storage of road salt', { law: 'Public Authorities Law', summary: 'Requires state agencies and public authorities to store road salt under cover' }),
   'S500-2025': bill('S500', 2025, 'Relates to broadband telecommunications access', { law: 'Public Service Law' }),
   'S3003-2025': bill('S3003', 2025, 'Enacts into law major components of legislation necessary to implement the state education, labor and family assistance budget for the 2025-2026 state fiscal year', { budget: true, text: BUDGET_TEXT.replace('New York state energy research and development authority', 'state energy office') }),
   'S3006-2025': bill('S3006', 2025, 'Enacts into law major components of legislation necessary to implement the state transportation, economic development and environmental conservation budget', { budget: true, text: BUDGET_TEXT }),
