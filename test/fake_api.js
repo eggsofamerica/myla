@@ -30,6 +30,11 @@ const BUDGET_TEXT = [
   '                             PART C', '     1  Section 1. The tax law is amended. Nothing about energy here except energy once.',
   '                             PART D', '     1  Section 1. NYSERDA shall establish a cap and invest program to reduce greenhouse gas emissions.'
 ].join('\n');
+const CARRY = {
+  'S700-2025': bill('S700', 2025, 'Relates to public library hours', { law: 'Education Law' }),
+  'S50-2027': bill('S50', 2027, 'Relates to the establishment of a thermal energy network program', { law: 'Public Service Law', pub: '2027-01-08T10:00:00', prev: [{ basePrintNo: 'S100', session: 2025, printNo: 'S100', version: '' }, { basePrintNo: 'S5000', session: 2023 }] }),
+  'S60-2027': Object.assign(bill('S60', 2027, 'Relates to public library hours', { law: 'Education Law', pub: '2027-01-09T10:00:00', prev: [{ basePrintNo: 'S700', session: 2025, printNo: 'S700', version: '' }] }), { _hidden: true }),
+};
 const DB = {
   'S100-2025': bill('S100', 2025, 'Relates to the establishment of a thermal energy network program', { sameAs: 'A200', law: 'Public Service Law', cos: 3, prev: [{ basePrintNo: 'S5000', session: 2023 }, { basePrintNo: 'A7000', session: 2021 }, { basePrintNo: 'S5000', session: 2023 }] }),
   'A200-2025': bill('A200', 2025, 'Relates to the establishment of a thermal energy network program', { sameAs: 'S100', law: 'Public Service Law', sponsor: 'John Roe' }),
@@ -74,8 +79,11 @@ function handle(url) {
   let m;
   if ((m = p.match(/^\/bills\/(\d+)\/search$/))) {
     const term = u.searchParams.get('term');
-    const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {});
-    let items = Object.values(all);
+    const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {}, state.carryOn ? CARRY : {});
+    let items = Object.values(all).filter(b => String(b.session) === m[1]);
+    const pv = term.match(/previousVersions\.items\.basePrintNo:(\w+)/);
+    if (pv) return list(items.filter(b => b.previousVersions.items.some(x => x.basePrintNo === pv[1])).map(b => ({ result: summaryOf(b), rank: 1, highlights: {} })));
+    items = items.filter(b => !b._hidden);
     if (/billType\.resolution:true/.test(term)) items = state.resOn ? Object.values(RES) : [];
     else if (/sponsor\.budget:true/.test(term)) items = items.filter(b => b.sponsor.budget);
     else if (/lawSection/.test(term)) items = items.filter(b => !b.sponsor.budget && b.amendments.items[b.activeVersion].lawSection === 'Public Service Law');
@@ -86,7 +94,7 @@ function handle(url) {
   }
   if ((m = p.match(/^\/bills\/updates\/(.+)$/))) return list(state.updated.map(id => ({ id: { basePrintNo: id.split('-')[0], session: +id.split('-')[1] }, contentType: 'BILL' })));
   if ((m = p.match(/^\/bills\/(\d+)\/([A-Z]\d+)$/))) {
-    const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {}, RES);
+    const all = Object.assign({}, DB, state.newOn ? NEW_LATER : {}, state.carryOn ? CARRY : {}, RES);
     const b = all[m[2] + '-' + m[1]];
     if (!b) return { code: 404, body: '{"success":false}' };
     return ok({ responseType: 'bill', result: b });

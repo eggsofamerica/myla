@@ -8,7 +8,7 @@ A personal tracker for New York State legislation on energy and climate: bills, 
 - **collector/myla_tools.py**: a small Python tool the Claude check downloads and runs. It cuts floor transcripts down to the debate on given bills (Senate text from Open Legislation, Assembly PDFs from the Assembly's Granicus archive), and hearing transcripts down to chosen witnesses (using the transcript's speaker index) or to pages that name given bills.
 - **claude-check/**: instructions for a scheduled Claude task. It reads the event queue, has a larger model write bill summaries and budget briefs, sends results back through an inbox folder in Drive, and ends with a push notification.
 - **dashboard/**: a single-page dashboard. It reads the data file and writes Track and Stop tracking requests through the viewer's Google Drive connector, and can start a check on demand.
-- **test/**: a Node harness that mocks the Apps Script services and the Open Legislation API. Run `node test/run.js` and `node test/run_tx.js` (transcripts).
+- **test/**: a Node harness that mocks the Apps Script services and the Open Legislation API. Run `node test/run.js`, `node test/run_tx.js` (transcripts) and `node test/run_carry.js` (carry-over).
 
 ## Configuration
 

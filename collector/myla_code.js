@@ -5,7 +5,7 @@
 globalThis.MyLA = (function () {
   'use strict';
   var CFG = {
-    VERSION: '2026-11-22.7',
+    VERSION: '2026-11-24.2',
     ROOT: 'YOUR_MYLA_FOLDER_ID',
     INBOX: 'YOUR_INBOX_FOLDER_ID',
     WORK: 'YOUR_WORK_FOLDER_ID',
@@ -395,7 +395,13 @@ globalThis.MyLA = (function () {
         var prev = db.bills[id];
         var prevSnap = prev && prev.snap;
         var rec = normalize(b, prev);
-        if (!prev && opts.relevantOnly && rec.rel === 'exclude') { db.excluded = db.excluded || {}; db.excluded[id] = 1; return; }
+        var carried = !prev && carryMatch(db, rec);
+        if (carried) {   // a bill tracked in an earlier session, reintroduced: keep it whatever its topic
+          if (rec.rel === 'exclude') rec.rel = 'manual';
+          db.queue.carry = db.queue.carry || [];
+          if (!db.queue.carry.some(function (q) { return q.id === id; })) db.queue.carry.push({ id: id, from: carried });
+        }
+        if (!prev && !carried && opts.relevantOnly && rec.rel === 'exclude') { db.excluded = db.excluded || {}; db.excluded[id] = 1; return; }
         db.bills[id] = rec;
         if (prev && prev.tr) diffTracked(db, rec, b, prevSnap);
         if (!prev && opts.onNew) opts.onNew(rec);
@@ -604,6 +610,60 @@ globalThis.MyLA = (function () {
     log('hearings: ' + hs.length + ' on calendar, ' + n + ' new');
   }
 
+
+
+  // ------------------------------------------------------------------ carry-over
+  // Bills tracked when a session ends are remembered in db.carry. A later bill that lists one of
+  // them among its previous versions (a reintroduction) is tracked automatically, once.
+  function carryMatch(db, rec) {
+    if (!db.carry || !rec.prev || !rec.prev.length) return null;
+    for (var i = 0; i < rec.prev.length; i++) { var c = db.carry[rec.prev[i]]; if (c && !c.now && !c.off) return rec.prev[i]; }
+    return null;
+  }
+  function addCarry(db, b) {
+    if (!b || !b.tr) return;
+    var stx = String(b.st || '') + ' ' + String(b.la || '');
+    if (/signed|chapter/i.test(stx) && !/veto/i.test(stx)) return;   // enacted: nothing to reintroduce
+    db.carry = db.carry || {};
+    db.carry[b.id] = { p: b.p, t: b.t, sp: b.sp || '', session: Number(b.id.split('-')[1]), sa: b.sa || '', st: b.st || '' };
+  }
+  function applyCarry(db, id, from) {
+    var c = (db.carry || {})[from], b = db.bills[id];
+    if (!c || c.now || c.off || !b) return;
+    var was = !!b.tr;
+    if (!was) setTracked(db, id, true);
+    c.now = id; c.at = nyNow().day;
+    // the old bill's same-as may have been reintroduced as the new bill's same-as
+    (b.sa || '').split(', ').filter(String).concat([id]).forEach(function (x) {
+      ((db.bills[x] && db.bills[x].prev) || []).forEach(function (pv) { var cc = db.carry[pv]; if (cc && !cc.now) { cc.now = x; cc.at = c.at; } });
+    });
+    var fs = Number(from.split('-')[1]);
+    addActivity(db, id, 'Tracked automatically: reintroduced from ' + from.split('-')[0] + ' (' + fs + '–' + String(fs + 1).slice(2) + ')');
+    if (!was) addEvent(db, { type: 'info', detail: 'Reintroduced and now tracked: ' + b.p + ' (' + String(b.t).slice(0, 70) + '), previously ' + from.split('-')[0] + ' in ' + fs + '–' + (fs + 1) + '.' });
+    log('carry-over: ' + from + ' -> ' + id + (was ? ' (already tracked)' : ''));
+  }
+  // Catch reintroductions the keyword searches miss (bills added by hand on other topics):
+  // search the current session for bills whose previous versions include an open carry item.
+  function searchCarry(db) {
+    var open = Object.keys(db.carry || {}).filter(function (k) { var c = db.carry[k]; return !c.now && !c.off; });
+    if (!open.length) return;
+    var session = db.session;
+    db.queue.carry = db.queue.carry || [];
+    open.slice(0, 40).forEach(function (old) {
+      if (timeLeft() < 90000) return;
+      var c = db.carry[old], base = old.split('-')[0], hits = [];
+      if (db.pvField && db.pvField !== 'none') { try { hits = searchAll(session, db.pvField + ':' + base, 20); } catch (e) { if (/TIME/.test(String(e))) return; } }
+      if (!hits.length && c.t) { try { hits = searchAll(session, 'title:"' + String(c.t).replace(/["\\]/g, ' ').slice(0, 160) + '"', 20); } catch (e) { if (/TIME/.test(String(e))) return; } }
+      var ids = hits.filter(function (r) { return r && r.basePrintNo && /^[SA]\d/.test(r.basePrintNo); })
+        .map(function (r) { return billId(r.basePrintNo, r.session || session); }).slice(0, 8);
+      var need = ids.filter(function (id) { return !db.bills[id]; });
+      if (need.length) refreshBills(db, need, {});   // new bills go through carryMatch
+      ids.forEach(function (id) {
+        var b = db.bills[id];
+        if (b && (b.prev || []).indexOf(old) >= 0 && !db.queue.carry.some(function (q) { return q.id === id; })) db.queue.carry.push({ id: id, from: old });
+      });
+    });
+  }
 
   // ------------------------------------------------------------------ transcripts: floor debate + hearings
   // Sources: Senate floor and Senate hearing transcripts from Open Legislation (text);
@@ -1100,6 +1160,10 @@ globalThis.MyLA = (function () {
         releaseFloorSrc(db, fl.ch.charAt(0) + '|' + fl.date);
         break;
       }
+      case 'carry_off': {
+        if (db.carry && db.carry[op.id]) { db.carry[op.id].off = true; log('carry-over: stopped watching ' + op.id); }
+        break;
+      }
       case 'floor_watch': {   // manual/test: watch a floor date for a bill
         var fb = db.bills[op.id];
         if (fb) { queueFloor(db, fb, op.chamber, op.date); db.kick = true; }
@@ -1202,6 +1266,7 @@ globalThis.MyLA = (function () {
       counts: { bills: bills.length, tracked: bills.filter(function (b) { return b.tr; }).length },
       bills: bills.map(compact),
       hearings: hearings.map(function (h) { return { key: h.key, date: h.date, iso: h.iso || hearingIso(h), subject: h.subject, text: h.text, url: h.link, found: h.found, match: h.match, rel: h.rel, note: h.note || '', agenda: h.agenda || null, notice: h.notice || '', tx: !!h.txFiles, rv: h.rv ? { st: h.rv.st, tst: h.rv.tst || '', auto: !!h.rv.auto, all: !!h.rv.all, picks: h.rv.picks || [], bills: h.rv.bills || [], req: h.rv.req, brief: h.rv.brief || null, tbrief: h.rv.tbrief || null } : null }; }),
+      carry: Object.keys(db.carry || {}).map(function (k) { var c = db.carry[k]; return { id: k, p: c.p, t: c.t, sp: c.sp, session: c.session, now: c.now || '', at: c.at || '', off: !!c.off }; }),
       floor: Object.keys(db.floor || {}).map(function (k) { var f = db.floor[k]; return { key: k, bills: f.bills, ch: f.ch, date: f.date, st: f.st, sum: f.sum || '', note: f.note || '', at: f.at || '' }; }),
       budget: { briefs: db.budget.briefs.slice(0, 20), bills: Object.keys(db.budget.bills).map(function (k) { var x = db.budget.bills[k]; return { id: x.id, b: x.b, t: x.t, v: x.v, st: x.st, u: x.u, versions: x.versions }; }) },
       activity: db.activity.slice(0, 150),
@@ -1273,9 +1338,13 @@ globalThis.MyLA = (function () {
       var arch = {};
       Object.keys(db.bills).forEach(function (k) { if (db.bills[k].tr) arch[k] = db.bills[k]; });
       DriveApp.getFolderById(CFG.WORK).createFile('archive_' + db.session + '.json', JSON.stringify({ tracked: arch, activity: db.activity }), 'text/plain');
+      db.carry = db.carry || {};
+      Object.keys(db.carry).forEach(function (k) { if (db.carry[k].now || db.carry[k].off || Number(k.split('-')[1]) < session - 6) delete db.carry[k]; });
+      Object.keys(arch).forEach(function (k) { addCarry(db, arch[k]); });
+      db.queue.carry = [];
       log('session rollover ' + db.session + ' -> ' + session + '; archived ' + Object.keys(arch).length + ' tracked bills');
       db.bills = {}; db.activity = []; db.excluded = {}; db.budget.bills = {}; db.budget.res = {}; db.budget.resSeeded = false; db.queue.refetch = []; db.prevFilled = true; db.authDone = true; db.authTight = true;
-      addEvent(db, { type: 'info', detail: 'New legislative session ' + session + '–' + (session + 1) + ' started. MyLA archived last session\'s tracked bills and is loading the new session.' });
+      addEvent(db, { type: 'info', detail: 'New legislative session ' + session + '–' + (session + 1) + ' started. MyLA archived last session\'s tracked bills and is loading the new session. Tracked bills that are reintroduced will be tracked again automatically.' });
     }
     db.session = session;
     db.backfill = { stage: 'search', session: session, started: n.iso };
@@ -1385,6 +1454,30 @@ globalThis.MyLA = (function () {
     try {
       rollSession(db, n);
       if (ingest(db)) did.push('inbox');
+      var pk = db.carryProbe !== 2 && (!db.backfill || db.backfill.stage === 'done') ? Object.keys(db.bills).filter(function (k) { var b = db.bills[k]; return b.prev && b.prev.length && b.rel !== 'exclude'; }).slice(0, 3) : [];
+      if (pk.length && timeLeft() > 150000) {   // one-time: find which field name the live API accepts for previous-version searches
+        db.carryProbe = 2;
+        try {
+          var fields = ['previousVersions.items.basePrintNo', 'previousVersions.items.printNo', 'previousVersions.basePrintNo'], good = '';
+          fields.forEach(function (f) {
+            if (good) return;
+            var ok = 0;
+            pk.forEach(function (k) {
+              var base = db.bills[k].prev[0].split('-')[0], rs = [];
+              try { rs = searchAll(db.session, f + ':' + base, 20); } catch (e) {}
+              if (rs.some(function (r) { return billId(r.basePrintNo, r.session || db.session) === k; })) ok++;
+            });
+            log('carry-over probe: field ' + f + ' found ' + ok + ' of ' + pk.length);
+            if (ok && ok === pk.length) good = f;
+          });
+          db.pvField = good || 'none';
+          log('carry-over: previous-version search ' + (good ? 'uses ' + good : 'not available; using exact-title search'));
+        } catch (e) { log('carry-over probe failed: ' + e); }
+      }
+      if ((db.queue.carry || []).length && timeLeft() > 60000) {
+        db.queue.carry.splice(0).forEach(function (q) { try { applyCarry(db, q.id, q.from); } catch (e) { log('carry-over failed for ' + q.id + ': ' + e); } });
+        did.push('carry-over');
+      }
       if (db.kick) {   // a review request or floor watch just arrived: look for its transcript now
         delete db.kick;
         if (timeLeft() > 150000) { try { checkFloor(db); } catch (e) { log('floor failed: ' + e); } }
@@ -1455,6 +1548,7 @@ globalThis.MyLA = (function () {
         if (force || (slot && db.lastSlot !== slot)) {
           regularCheck(db, n);
           if (timeLeft() > 120000) { try { checkHearings(db, false); } catch (e) { log('hearings failed: ' + e); } }
+          if (timeLeft() > 120000 && db.carryDay !== nyNow().day) { try { searchCarry(db); db.carryDay = nyNow().day; } catch (e) { log('carry-over search failed: ' + e); } }
           if (timeLeft() > 100000) { try { checkFloor(db); } catch (e) { log('floor failed: ' + e); } }
           if (timeLeft() > 100000) { try { checkHearingSources(db); } catch (e) { log('hearing sources failed: ' + e); } }
           if (inSessionWindow(n) || force) {
